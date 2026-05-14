@@ -34,7 +34,6 @@
 //@复制文件 @当前模块路径 "ffmpeg\bin\avutil-56.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\swscale-5.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\avformat-58.dll"
-//@复制文件 @当前模块路径 "ffmpeg\bin\avformat-58.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\swresample-3.dll"
 #endif
 

@@ -73,7 +73,7 @@ swresample-3.dll
 swscale-5.dll
 ```
 
-下载地址（Win7 可用的 4.4.1 shared build）：<https://github.com/GyanD/codexffmpeg/releases/tag/4.4.1>
+下载地址（Win7 可用的 4.4.3 shared build）：<https://github.com/GyanD/codexffmpeg/releases/tag/4.4.3>
 
 > 如果只跑 Win10/11 且不需要 AV1/VVC，**用 4.4.x 是最优选择**：性能差距 ≤ 5%，DLL 体积少 20MB+，LTS 更稳。
 
