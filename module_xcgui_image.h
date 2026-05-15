@@ -176,6 +176,10 @@ public:
 	//@隐藏{
 	CXImageEx();
 	virtual ~CXImageEx();
+	virtual HXCGUI GetHXCGUI(){ return m_hEle; }
+	operator HELE() const { return m_hEle; }
+	operator HXCGUI(){ return m_hEle; }
+	virtual void operator=(const HELE hEle){ m_hEle = hEle; }
 	//@隐藏}
 
 //@备注 创建图片元素.

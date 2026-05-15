@@ -118,9 +118,6 @@ HELE CXImageEx::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 	// 普通 XEle 元素就够 - 也避开 CXLayout default mouse-through 等需要额外配置的细节.
 	m_hEle = XEle_Create(x, y, cx, cy, hParent);
 	if (!m_hEle) return NULL;
-	// 我们走 BkInfo 路径填底色 (RebuildBkInfo 里 XEle_AddBkFill), 必须显式关掉
-	// 透明传导, 否则父背景会透过 alpha=0 的图片像素显出来 (用户期待的是 m_bkColor).
-	XEle_EnableBkTransparent(m_hEle, FALSE);
 
 	RefreshDpiScale();
 	RebuildBkInfo();
@@ -169,10 +166,9 @@ int CXImageEx::OnSizeImpl(HELE /*hEle*/, int /*nFlags*/, UINT /*nAdjustNo*/, BOO
 	// 注意不在这里直接调 RescaleCurrentFrameIfNeeded: resize 高频, 让 OnPaint 在真正需要画
 	// 之前才缩, 避免 resize 一帧未到 paint 又被 resize 覆盖的浪费.
 	m_gdiDibDirty = true;
-	// m_curW = 0 是给 RescaleCurrentFrameIfNeeded 的"未初始化"哨兵, 设 0 强制下次 paint 必重缩.
 	{
 		std::lock_guard<std::mutex> lk(m_curFrameMutex);
-		m_curW = m_curH = 0;
+		m_scaledForFrame = -1;
 		m_curDirty = true;
 	}
 	RedrawSelf();
