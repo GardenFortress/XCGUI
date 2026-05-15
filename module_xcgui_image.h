@@ -38,6 +38,7 @@
 //@复制文件 @当前模块路径 "ffmpeg\bin\swresample-3.dll"
 
 #include <d2d1.h>
+#include <gdiplus.h>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -80,7 +81,8 @@ extern "C" {
 #pragma comment(lib, "avutil.lib")
 #pragma comment(lib, "swscale.lib")
 
-#pragma comment(lib, "Gdi32.lib")     // OnPaintGdi: StretchDIBits / FillRect / BitBlt
+#pragma comment(lib, "Gdiplus.lib")   // OnPaintGdi: GDI+ alpha blend
+#pragma comment(lib, "Gdi32.lib")
 #pragma comment(lib, "User32.lib")
 
 //@隐藏{

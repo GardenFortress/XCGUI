@@ -922,7 +922,6 @@ void CXImageEx::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 }
 
 void CXImageEx::OnPaintGdi(HDC hdc, HDRAW hDraw){
-	// 离屏 DIB 合成 + 单次 BitBlt 上屏: 避免多次 StretchDIBits 不同区域闪烁.
 	int eleW = XEle_GetWidth(m_hEle);
 	int eleH = XEle_GetHeight(m_hEle);
 	int eleWPhys = (int)((float)eleW * m_dpiScale + 0.5f);
@@ -932,12 +931,6 @@ void CXImageEx::OnPaintGdi(HDC hdc, HDRAW hDraw){
 	RECT rcDstHdc = { 0, 0, eleWPhys, eleHPhys };
 	XDraw_ConvRect(hDraw, &rcDstHdc);
 
-	bool dibRecreated = (m_gdiDibW != eleWPhys || m_gdiDibH != eleHPhys || !m_gdiDib);
-	if (!EnsureGdiDib(eleWPhys, eleHPhys)) return;
-	if (dibRecreated) m_gdiDibDirty = true;
-	HDC dcMem = m_gdiMemDC;
-
-	// 算目标矩形 + 按需重缩 (与 D2D 同步骤).
 	RECT rcDst;
 	ComputeDestRect(eleWPhys, eleHPhys, &rcDst);
 	int dstW = rcDst.right - rcDst.left;
@@ -948,65 +941,41 @@ void CXImageEx::OnPaintGdi(HDC hdc, HDRAW hDraw){
 
 	int srcW = 0, srcH = 0;
 	std::vector<uint8_t> localCopy;
-	bool haveFrameToPaint = false;
 	{
 		std::lock_guard<std::mutex> lk(m_curFrameMutex);
 		srcW = m_curW;
 		srcH = m_curH;
-		if (m_curDirty && srcW > 0 && srcH > 0 && !m_curBgra.empty()){
+		if (srcW > 0 && srcH > 0 && !m_curBgra.empty()){
 			localCopy = m_curBgra;
 			m_curDirty = false;
-			haveFrameToPaint = true;
 		}
 	}
 
-	bool needRedrawDib = m_gdiDibDirty || haveFrameToPaint;
-	if (needRedrawDib){
-		// 1) 背景填充. GDI ::CreateSolidBrush 要求 COLORREF 高字节为 0; XCGUI RGBA 宏的
-		//    alpha 在高字节, 必须 mask 掉.
-		RECT rcAll = { 0, 0, eleWPhys, eleHPhys };
-		COLORREF gdiBg = m_bkColor & 0x00FFFFFF;
-		HBRUSH hBg = ::CreateSolidBrush(gdiBg);
-		if (hBg){
-			::FillRect(dcMem, &rcAll, hBg);
-			::DeleteObject(hBg);
-		}
+	Gdiplus::Graphics graphics(hdc);
+	graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+	graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+	graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+	graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
 
-		// 2) 图片像素. 没新帧也用上次缓存 (resize 重建 DIB 但当前帧没变).
-		if (!haveFrameToPaint){
-			std::lock_guard<std::mutex> lk(m_curFrameMutex);
-			if (srcW > 0 && srcH > 0 && !m_curBgra.empty()){
-				localCopy = m_curBgra;
-			}
-		}
-		if (!localCopy.empty()){
-			int dstX = rcDst.left;
-			int dstY = rcDst.top;
-			if (dstW > 0 && dstH > 0){
-				BITMAPINFO sbmi = {};
-				sbmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-				sbmi.bmiHeader.biWidth       = srcW;
-				sbmi.bmiHeader.biHeight      = -srcH;     // top-down
-				sbmi.bmiHeader.biPlanes      = 1;
-				sbmi.bmiHeader.biBitCount    = 32;
-				sbmi.bmiHeader.biCompression = BI_RGB;
-				::SetStretchBltMode(dcMem, COLORONCOLOR);
-				// localCopy 已经是 *目标尺寸*, src 跟 dst 同尺寸 -> StretchDIBits 不缩放
-				// (像 BitBlt 但能搞 BGRA32). 这是关键: GDI 没有像 D2D 那样的 LINEAR 上屏,
-				// 但因为我们已经在 swscale 里做完高质量缩放, 这里 1:1 不会损失.
-				::StretchDIBits(dcMem,
-				                dstX, dstY, dstW, dstH,
-				                0, 0, srcW, srcH,
-				                localCopy.data(), &sbmi, DIB_RGB_COLORS, SRCCOPY);
-			}
-		}
-		m_gdiDibDirty = false;
+	BYTE bgA = (BYTE)((m_bkColor >> 24) & 0xFF);
+	if (bgA != 0){
+		BYTE r = (BYTE)((m_bkColor      ) & 0xFF);
+		BYTE g = (BYTE)((m_bkColor >>  8) & 0xFF);
+		BYTE b = (BYTE)((m_bkColor >> 16) & 0xFF);
+		Gdiplus::SolidBrush brush(Gdiplus::Color(bgA, r, g, b));
+		graphics.FillRectangle(&brush, rcDstHdc.left, rcDstHdc.top, eleWPhys, eleHPhys);
 	}
 
-	// 3) 整块 BitBlt 回屏幕. XDraw_ConvRect 已转好画布坐标.
-	::BitBlt(hdc,
-	         rcDstHdc.left, rcDstHdc.top, eleWPhys, eleHPhys,
-	         dcMem, 0, 0, SRCCOPY);
+	if (!localCopy.empty() && srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0){
+		Gdiplus::Bitmap bmp(srcW, srcH, srcW * 4, PixelFormat32bppARGB, localCopy.data());
+		graphics.DrawImage(&bmp,
+		                   rcDstHdc.left + rcDst.left,
+		                   rcDstHdc.top  + rcDst.top,
+		                   dstW,
+		                   dstH);
+	}
+
+	m_gdiDibDirty = false;
 }
 
 //============================================================================
