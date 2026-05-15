@@ -96,7 +96,7 @@ enum xblur_theme_
 //@别名 模糊主题默认参数
 struct CXBlurThemeDefaults
 {
-	//@别名 叠加色 (0xAABBGGRR)
+	//@别名 叠加色
 	COLORREF tintColor;
 	//@别名 噪点
 	float    noise;
