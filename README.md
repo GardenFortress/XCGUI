@@ -1,6 +1,6 @@
 # XCGUI 模块扩展库
 
-基于 [炫彩界面库 (XCGUI)](https://www.xcgui.com) 的高质量扩展模块集合，提供 **DirectWrite 富文本编辑器** 和 **FFmpeg 视频播放器**。两个模块都做了 D2D 主路径 + GDI/GDI+ 兜底，**兼容 Windows 7 SP1+ 无 GPU 虚拟机环境**。
+基于 [炫彩界面库 (XCGUI)](https://www.xcgui.com) 的高质量扩展模块集合，提供 **DirectWrite 富文本编辑器**、**FFmpeg 视频播放器** 和 **FFmpeg 增强图片元素**。模块都做了 D2D 主路径 + GDI/GDI+ 兜底，**兼容 Windows 7 SP1+ 无 GPU 虚拟机环境**。
 
 ---
 
@@ -43,16 +43,33 @@
 - **DPI 自适应**：跟随 XCGUI DPI 缩放系统
 - **抗阻塞**：网络流 / debug heap 慢分配场景下，靠 `interrupt_callback` 让 `avformat_open_input` / `av_read_frame` 在几十毫秒内中断退出
 
+### `module_xcgui_image` —— FFmpeg 增强图片元素
+
+| | |
+|---|---|
+| **类名** | `CXImageEx`（继承 `CXEle`） |
+| **别名** | 炫彩增强图片类 |
+| **依赖** | FFmpeg dev 包（4.x ~ 8.x 任一）、Windows SDK |
+
+**特性**
+
+- **格式支持**：静态 JPG / PNG / BMP / WEBP / HEIC / AVIF / TIFF / JPEG2000 等，动态 GIF / APNG / WEBP-anim / AVIF-anim
+- **高质量缩放**：显示阶段用 `swscale` 一步缩放，支持 Nearest / Bilinear / Bicubic / Lanczos，默认静态图 Lanczos、动态图 Bilinear
+- **动画时长**：从 FFmpeg packet duration 提取真实 per-frame duration，不再固定 33ms
+- **渲染**：D2D 主路径（`ID2D1Bitmap` 上传 + `DrawBitmap`）+ GDI+ 离屏 DIB 降级路径
+- **内存策略**：加载阶段保留源 `AVFrame`，显示阶段只缩放当前帧，避免多帧动图预转 BGRA 导致内存爆炸
+- **控制接口**：播放 / 暂停 / 停止 / seek frame / loop / fit mode / interpolation / 背景色 / 加载完成与错误回调
+
 ---
 
 ## 兼容性矩阵
 
-| 系统 | editdw | video | 备注 |
-|---|---|---|---|
-| Windows 11 / 10 | ✅ D2D 渲染 | ✅ D2D + 硬解 | 推荐配置 |
-| Windows 8 / 8.1 | ✅ D2D 渲染 | ✅ D2D + 硬解 |  |
-| Windows 7 SP1（有 GPU 驱动） | ✅ D2D | ✅ D2D + 软解 | DXVA2 可能可用 |
-| Windows 7 SP1（无 GPU 驱动，VMware 默认） | ✅ GDI 降级 | ✅ GDI+ 降级 + 软解 | 必须用 ffmpeg-4.4 DLL |
+| 系统 | editdw | video | image | 备注 |
+|---|---|---|---|---|
+| Windows 11 / 10 | ✅ D2D 渲染 | ✅ D2D + 硬解 | ✅ D2D | 推荐配置 |
+| Windows 8 / 8.1 | ✅ D2D 渲染 | ✅ D2D + 硬解 | ✅ D2D |  |
+| Windows 7 SP1（有 GPU 驱动） | ✅ D2D | ✅ D2D + 软解 | ✅ D2D | DXVA2 可能可用 |
+| Windows 7 SP1（无 GPU 驱动，VMware 默认） | ✅ GDI 降级 | ✅ GDI+ 降级 + 软解 | ✅ GDI+ 降级 | 必须用 ffmpeg-4.4 DLL |
 
 > ⚠️ **Win7 必须用 FFmpeg 4.4.x**。FFmpeg 5+ 引入了 `WaitOnAddress` 等 Win8+ API，Win7 上 `LoadLibrary` 会 `0xC0000005` 闪退。本仓库的 `@复制文件` 注解默认指向 4.4.x DLL（`avcodec-58.dll` 等）。
 
@@ -62,7 +79,7 @@
 
 **`module_xcgui_editdw`** —— 无外部 DLL（`dwrite.dll` Win7 SP1+ 系统自带）
 
-**`module_xcgui_video`**（默认 FFmpeg 4.4.x，Win7 兼容）
+**`module_xcgui_video` / `module_xcgui_image`**（默认 FFmpeg 4.4.x，Win7 兼容）
 
 ```
 avcodec-58.dll
@@ -83,7 +100,7 @@ swscale-5.dll
 
 ### 1. 加入 XCGUI 工程
 
-把 `module_xcgui_editdw.{h,cpp}` 和/或 `module_xcgui_video.{h,cpp}` 加入炫彩 IDE 工程。模块头文件顶部的 `@依赖` / `@复制文件` 注解会被炫彩 IDE 解析（自动 include / 自动复制 DLL）。
+把 `module_xcgui_editdw.{h,cpp}`、`module_xcgui_video.{h,cpp}` 和/或 `module_xcgui_image.{h,cpp}` 加入炫彩 IDE 工程。模块头文件顶部的 `@依赖` / `@复制文件` 注解会被炫彩 IDE 解析（自动 include / 自动复制 DLL）。
 
 ### 2. 头文件 include 顺序约束
 
@@ -91,11 +108,11 @@ swscale-5.dll
 
 ```cpp
 #include <d2d1.h>           // 先
-#include <dwrite.h>
+#include <dwrite.h>         // 仅 editdw 需要
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_editdw.h"  // 或 video
+#include "module_xcgui_editdw.h"  // 或 video / image
 ```
 
 ### 3. 选择渲染后端
@@ -121,6 +138,14 @@ CXVideo* pVideo = new CXVideo();
 pVideo->Create(0, 0, 800, 600, hParent);
 pVideo->Open(L"D:\\test.mp4");
 pVideo->Play();
+
+// image
+CXImageEx* pImg = new CXImageEx();
+pImg->Create(0, 0, 400, 300, hParent);
+pImg->SetFitMode(ximage_fit_contain);
+pImg->SetInterpolation(ximage_interp_lanczos);
+pImg->SetLoop(TRUE);
+pImg->LoadFromFile(L"D:\\test.avif");
 ```
 
 详细 API 见各 `.h` 文件中的 `//@注释`（中文友好，配合炫彩 IDE 智能感知体验最佳）。
@@ -132,14 +157,14 @@ pVideo->Play();
 - **MSVC 2015 +**（推荐 VS 2019 / 2022）
 - **Windows SDK** ≥ 10.0.17763
 - **XCGUI 界面库** ≥ 2025-12 版本（`module_xcgui_video` 需要 `XDraw_ConvRect` 处理 GDI+ 画布坐标）
-- **FFmpeg dev 包**（仅 `video` 模块需要）：把 `include/` / `lib/` 路径加到工程，`bin/` 下的 DLL 放到 EXE 同目录
+- **FFmpeg dev 包**（`video` / `image` 模块需要）：把 `include/` / `lib/` 路径加到工程，`bin/` 下的 DLL 放到 EXE 同目录
 
 ---
 
 ## 设计亮点
 
 - **D2D / GDI 双路径都打磨过**：不是简单的 "走不通就 throw"，是两条路径都仔细对齐了渲染细节（GDI+ 模式下用 `XDraw_ConvRect` 解决画布偏移，离屏 DIB 解决抽搐）
-- **大文本性能**：editdw 分段 layout + 懒构建，video 限流队列 + 帧丢弃策略
+- **大文本 / 媒体性能**：editdw 分段 layout + 懒构建，video 限流队列 + 帧丢弃策略，image 显示阶段只缩当前帧
 - **可中断 I/O**：FFmpeg `interrupt_callback` 配合 `m_quit` 原子量，网络流 30s 超时被压到几十毫秒退出
 - **零运行时崩溃**：硬解失败 / GPU 驱动缺失 / DPI 变化 / 窗口 resize 全部走 fallback，不抛异常
 
