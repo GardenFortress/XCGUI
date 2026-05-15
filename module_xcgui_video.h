@@ -8,14 +8,14 @@
 //@依赖  module_xcgui_class.h
 //@模块备注  基于 FFmpeg (libavformat / libavcodec / libswscale / libswresample) 解码,
 //          + WASAPI 音频输出, 渲染走 XCGUI 元素画布: D2D 主路径 + GDI 降级路径
-//          (StretchDIBits), 与 module_xcgui_editdw.cpp 同款 D2D->GDI 兜底策略一致,
+//          (StretchDIBits, 离屏 DIB 合成 + 一次 BitBlt 上屏),
 //          兼容 Win7 SP1+ 无 GPU 虚拟机. 多线程架构 (demux / 视频解码 / 音频解码 /
 //          音频渲染 4 线程), 以音频为主时钟做 A/V 同步, 在 XE_XC_TIMER 里按时钟驱动
 //          视频帧上屏. 自动跟随 XCGUI DPI 缩放系统.
 //@模块信息结束
 
 // =================================================================
-// 头文件依赖说明 (与 module_xcgui_editdw.h 相同的拓扑顺序约束):
+// 头文件依赖拓扑顺序说明:
 //   - @依赖 是 IDE 解析器(智能感知/别名/语法着色)用的, 不会自动注入 #include 给 cl.exe;
 //     所以下面要再用真实的 #include 链一次.
 //   - d2d1.h 必须先于 module_xcgui.h 完成, 让 d2d1 引入的 POINTF 抢占名字
@@ -27,18 +27,14 @@
 //     因为 d2d1 / FFmpeg 都对 POINTF, AVRational 等公共名字有约束, 顺序错了会重定义.
 // =================================================================
 
-#ifdef _DEBUG
-#else
 //@复制文件 @当前模块路径 "ffmpeg\bin\avcodec-58.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\avdevice-58.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\avutil-56.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\swscale-5.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\avformat-58.dll"
 //@复制文件 @当前模块路径 "ffmpeg\bin\swresample-3.dll"
-#endif
 
 #include <d2d1.h>
-#include <dwrite.h>          // 与 editdw 共用: 未来若叠加字幕走 DirectWrite, 头先备好
 
 // FFmpeg 头. 用户需要把 FFmpeg dev 包 (4.x / 5.x / 6.x / 7.x / 8.x 都行) include 路径加到工程,
 // 并把对应导入库放到链接器输入 (见文件末尾 #pragma comment).
@@ -125,7 +121,7 @@ extern "C" {
 //@隐藏{
 // =================================================================
 // 队列结构 (在类外是为了避开部分预编译头解析器对类内嵌 struct + std::deque<内嵌类型>
-// 的查找顺序问题, 与 editdw _XEditDW_Para 同样思路).
+// 的查找顺序问题).
 // =================================================================
 
 // 单包队列条目: 持 AVPacket 所有权 (av_packet_alloc / av_packet_free 配对).
@@ -637,8 +633,8 @@ public:
 	// 设计选择: 视频特有事件不映射到 XCGUI 自定义事件 ID 体系 (XCGUI 内置事件 ID 不可
 	// 由用户扩展, 见 module_xcgui.h XE_* 定义); 改用 *C 风格函数指针 + void* pUser*
 	// 注册 (上方 XVIDEO_PROC_* typedef). 不用 std::function 是为了让炫语言 / C / 旧 C++
-	// 端可调 (那些环境不支持匿名函数). 这与 editdw 内部使用 RegEventCPP1 注册标准 XCGUI
-	// 事件的策略不冲突 - 那是绑 XE_PAINT_END 等 XCGUI 已有事件, 这里则是 *自定义业务事件*.
+	// 端可调 (那些环境不支持匿名函数). XCGUI 标准事件 (XE_PAINT / XE_SIZE 等)
+	// 还是走 RegEventCPP1; 本事件类别仅限于 *自定义业务事件*.
 
 //@备注 媒体打开成功事件. 此时元数据 (尺寸/时长/帧率) 已就绪.
 //@参数 fn 事件回调函数指针; 传 NULL 取消注册. 回调里收到的 CXVideo* 与本对象相同.
@@ -858,12 +854,12 @@ private:
 
 	// ===== 渲染资源 =====
 	// D2D 路径: ID2D1Bitmap 每次 RT 变化时重建 (RT 由 XCGUI 持有, 元素 resize / 父窗口
-	// 切换 / 模式切换都会重建). 与 editdw 中 BmpRT 重建策略同型.
+	// 切换 / 模式切换都会重建). RT 指针变了 就丢旧 bitmap 用新 RT 重创.
 	ID2D1Bitmap*       m_pD2DBmp   = NULL;
 	ID2D1RenderTarget* m_pLastRT   = NULL;
 	int                m_d2dBmpW = 0;
 	int                m_d2dBmpH = 0;
-	// GDI 路径: 借鉴 editdw 的 BitmapRT 模型, 用 *离屏 DIB* 做合成缓冲. 所有 GDI 操作
+	// GDI 路径: 用 *离屏 DIB* 做合成缓冲. 所有 GDI 操作
 	// (背景 FillRect + 视频帧 StretchDIBits) 在 DIB 内完成, 最后一次 BitBlt 回 XCGUI
 	// 给的屏幕 HDC. 这样:
 	//   1) 屏幕 HDC 上一次只看到 *一次* BitBlt - 避免 "FillRect 已画 / StretchDIBits
@@ -881,7 +877,7 @@ private:
 	// 时反复拷贝 1080p ≈ 8MB 视频数据, UI 线程被吃光导致 video timer 推不动.
 	bool    m_gdiDibDirty = true;
 
-	// ===== DPI 缩放 (与 editdw m_dpiScale 模型一致) =====
+	// ===== DPI 缩放 =====
 	// 96 = 1.0; 144 = 1.5; 192 = 2.0. 元素客户区物理像素 = 逻辑像素 * dpiScale.
 	// XEle_GetWndClientRectDPI 返物理像素, 与 D2D RT face-value 同坐标系, 直接用即可;
 	// XDraw_GetOffset (GDI 路径) 返物理像素, 也是 face-value. 视频帧自身像素是设备无关的
@@ -985,7 +981,7 @@ private:
 	// 不区分来源, 都视作"用户活动".
 	int  OnMouseMoveActivity   (HELE hEle, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 
-	// 渲染分流, 与 editdw OnPaintImpl 同模式.
+	// 渲染分流: D2D 主路径 / GDI 兜底.
 	void OnPaintD2D(ID2D1RenderTarget* rt, HDRAW hDraw);
 	void OnPaintGdi(HDC hdc, HDRAW hDraw);
 	// GDI 离屏 DIB 管理: w/h = 元素物理像素客户区. 与现有 m_gdiDibW/H 不一致就重建.
@@ -995,9 +991,9 @@ private:
 	// 再 DeleteObject DIB, 最后 DeleteDC. 漏哪一步都会泄漏 GDI handle.
 	void ReleaseGdiDib();
 
-	// DPI 同步: 读 XWnd_GetDPI 刷新 m_dpiScale. 与 editdw RefreshDpiScale 同实现.
+	// DPI 同步: 读 XWnd_GetDPI 刷新 m_dpiScale.
 	void RefreshDpiScale();
-	// XEle_ClearBkInfo + AddBkFill, 让背景色与 XCGUI 标准管线协同 (与 editdw RebuildBkInfo 同思路).
+	// XEle_ClearBkInfo + AddBkFill, 让背景色与 XCGUI 标准管线协同.
 	void RebuildBkInfo();
 	// 把视频源像素映射到元素客户区物理像素的目标矩形 (按 m_fitMode 算).
 	// eleW / eleH 是物理像素; 输出 pDst 也是物理像素.

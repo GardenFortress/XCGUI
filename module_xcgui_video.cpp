@@ -16,10 +16,10 @@
 //         差不多 -> 把 BGRA buf 拷进 m_curBgra, dirty=true, RedrawSelf
 //         严重落后 -> 丢这帧, 拉下一帧重判
 //
-//   - OnPaintImpl 跟 editdw 同结构: 优先 D2D, 拿不到 RT 降级 GDI StretchDIBits.
+//   - OnPaintImpl: 优先 D2D, 拿不到 RT 降级 GDI StretchDIBits.
 //     画面起点用 ComputeDestRect 按 m_fitMode 在元素 *物理像素* 客户区里算.
 //
-//   - DPI: 沿用 editdw m_dpiScale 模型. 视频源像素是 device-independent, 在
+//   - DPI: m_dpiScale = 物理像素 / 逻辑像素. 视频源像素是 device-independent, 在
 //     ComputeDestRect 里直接映射到物理像素客户区, 不再乘 m_dpiScale.
 //
 // 所有模块级注释优先解释 *为什么这么写*, 而不是显而易见的 "what".
@@ -196,7 +196,7 @@ HELE CXVideo::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 }
 
 //============================================================================
-// 事件注册 (与 editdw InstallEvents 同模式)
+// 事件注册
 //============================================================================
 void CXVideo::InstallEvents(){
 	// XE_PAINT: 完全接管绘制. 处理函数里 置 *pbHandled=TRUE 跳过 XCGUI 默认
@@ -2043,7 +2043,7 @@ void CXVideo::OnPaintGdi(HDC hdc, HDRAW hDraw){
 	//   2) GDI 路径下 ::CreateSolidBrush 拒绝高字节 alpha != 0 的 COLORREF (XCGUI RGBA
 	//      宏布局 0xAABBGGRR), 默认 m_videoBkColor=RGBA(0,0,0,0xFF) -> brush 创建失败,
 	//      FillRect 实际不擦背景 -> 旧帧像素残留.
-	// 解法: 借鉴 editdw 的 BitmapRT 模型, 用 *离屏 DIB* 做合成缓冲, 所有绘制在 DIB 内
+	// 解法: 用 *离屏 DIB* 做合成缓冲, 所有绘制在 DIB 内
 	// 完成, 最后一次 BitBlt 回屏幕 hdc. 屏幕 hdc 上每帧只看到 *一次* 原子化 BitBlt.
 
 	int eleW = XEle_GetWidth(m_hEle);
