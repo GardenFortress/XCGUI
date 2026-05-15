@@ -42,18 +42,52 @@ D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include*
 
 ```cpp
 #include <d2d1.h>
-#include <dwrite.h>                  // editdw 需要
+#include <dwrite.h>                       // editdw 需要
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_blur.h"       // 或其他模块
+#include "module_xcgui_editdw.h"          // 按需 include: editdw / video / image / blur
 
-XInitXCGUI(TRUE);                    // D2D 主渲染; FALSE = GDI+ 兜底
+XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
+```
 
-CXBlur* p = new CXBlur();
-p->AttachToWnd(hWnd);
-p->SetTheme(xblur_theme_auto);
-p->SetCornerRadiusEx(16, 16, 0, 0);  // per-corner: 左上 / 右上 / 右下 / 左下
+### `CXEditDW`
+
+```cpp
+CXEditDW* pEdit = new CXEditDW();
+pEdit->Create(0, 0, 400, 300, hParent);
+pEdit->SetText(L"Hello 💰 世界 😀");
+```
+
+### `CXVideo`
+
+```cpp
+CXVideo* pVideo = new CXVideo();
+pVideo->Create(0, 0, 800, 600, hParent);
+pVideo->Open(L"D:\\test.mp4");
+pVideo->Play();
+```
+
+### `CXImageEx`
+
+```cpp
+CXImageEx* pImg = new CXImageEx();
+pImg->Create(0, 0, 400, 300, hParent);
+pImg->SetFitMode(ximage_fit_contain);
+pImg->SetInterpolation(ximage_interp_lanczos);
+pImg->SetLoop(TRUE);
+pImg->LoadFromFile(L"D:\\test.avif");
+```
+
+### `CXBlur`
+
+```cpp
+CXBlur* pBlur = new CXBlur();
+pBlur->AttachToWnd(hWnd);
+pBlur->SetTheme(xblur_theme_auto);
+pBlur->SetCornerRadiusEx(16, 16, 0, 0);   // per-corner: 左上 / 右上 / 右下 / 左下
+// 可选: 强制启用系统透明效果 (会写 HKCU 注册表, 详见下文)
+// CXBlur::ForceSystemTransparencyOn(TRUE);
 ```
 
 ## ⚠️ `CXBlur::ForceSystemTransparencyOn` 修改注册表
