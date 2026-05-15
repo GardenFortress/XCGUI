@@ -207,18 +207,30 @@ namespace {
 // host HWND 状态: 订阅的 element + hook 前的 WndProc + 标志位.
 struct _XBlur_HostBlurState {
 	std::set<HELE> subs;
-	WNDPROC origWndProc = NULL;
-	bool    enabled     = false;
-	bool    destroying  = false;
+	WNDPROC origWndProc  = NULL;
+	bool    enabled      = false;
+	bool    destroying   = false;
+	bool    pendingApply = false;  // 待首次 WM_PAINT 后再装 accent (冷启动防 flash)
 };
 static std::mutex                                g_hostBlurMutex;
 static std::map<HWND, _XBlur_HostBlurState>      g_hostBlurMap;
 
+// 前向声明: 子类 WndProc 后置阶段要回调它.
+static void XBlur_ApplyHostBlur_Locked(HWND host);
+
+// 自定义消息: 子类把延迟装 accent 的请求 PostMessage 给自己, 在下一拍消息泵里处理.
+// 走 WM_APP 偏移让原 WndProc 不会去处理它.
+static constexpr UINT XBLUR_WM_APPLY_ACCENT = WM_APP + 0x4321;
+
 // subclass WndProc:
-//   WM_ERASEBKGND: 返回 1 阻止 GDI 擦背景 (否则盖掉 acrylic).
-//   WM_NCDESTROY : 标 destroying, 让 release 跳过 disable accent
-//                  (destroy 路径调 SetWindowCompositionAttribute(DISABLED)
-//                  会触发画面定格 + 残留窗口).
+//   WM_ERASEBKGND     : 返回 1 阻止 GDI 擦背景 (否则盖掉 acrylic).
+//   WM_PAINT          : 调 orig 让 XCGUI 完成首帧 paint, 之后若 pendingApply
+//                       挂着则 PostMessage(XBLUR_WM_APPLY_ACCENT) 延一拍装 accent.
+//                       此时 backbuffer 已被 XCGUI 填成 opaque BG + element 区
+//                       COPY-blend tint, DWM 下一帧 composite 直接出正确画面,
+//                       跳过"整窗 alpha=0 全 backdrop"那一闪.
+//   XBLUR_WM_APPLY_ACCENT : 执行 ApplyHostBlur_Locked.
+//   WM_NCDESTROY      : 标 destroying, 让 release 跳过 disable accent.
 static LRESULT CALLBACK XBlur_HostSubclassWndProc(HWND h, UINT m, WPARAM w, LPARAM l){
 	if (m == WM_ERASEBKGND){
 		return 1;
@@ -230,14 +242,43 @@ static LRESULT CALLBACK XBlur_HostSubclassWndProc(HWND h, UINT m, WPARAM w, LPAR
 			it->second.destroying = true;
 		}
 	}
+	if (m == XBLUR_WM_APPLY_ACCENT){
+		std::lock_guard<std::mutex> lk(g_hostBlurMutex);
+		auto it = g_hostBlurMap.find(h);
+		if (it != g_hostBlurMap.end() && !it->second.destroying){
+			XBlur_ApplyHostBlur_Locked(h);
+		}
+		return 0;  // 自定义消息不透给 orig.
+	}
+
 	WNDPROC orig = NULL;
 	{
 		std::lock_guard<std::mutex> lk(g_hostBlurMutex);
 		auto it = g_hostBlurMap.find(h);
 		if (it != g_hostBlurMap.end()) orig = it->second.origWndProc;
 	}
-	return orig ? CallWindowProcW(orig, h, m, w, l)
-	            : DefWindowProcW(h, m, w, l);
+	LRESULT lr = orig ? CallWindowProcW(orig, h, m, w, l)
+	                  : DefWindowProcW(h, m, w, l);
+
+	// WM_PAINT 后置: 首帧 paint 完成 → 派发延迟装 accent 信号.
+	// PostMessage 而非直接调 ApplyHostBlur_Locked, 留一拍给 swapchain Present
+	// flush GPU, 防 DWM 拿到的还是上一帧空 backbuffer.
+	if (m == WM_PAINT){
+		bool needPost = false;
+		{
+			std::lock_guard<std::mutex> lk(g_hostBlurMutex);
+			auto it = g_hostBlurMap.find(h);
+			if (it != g_hostBlurMap.end() && it->second.pendingApply &&
+			    !it->second.destroying){
+				it->second.pendingApply = false;  // 只触发一次
+				needPost = true;
+			}
+		}
+		if (needPost){
+			::PostMessageW(h, XBLUR_WM_APPLY_ACCENT, 0, 0);
+		}
+	}
+	return lr;
 }
 
 // 给 host 应用 ACCENT_ACRYLIC. 调用方持锁.
@@ -292,7 +333,18 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 	it->second.enabled = false;
 }
 
-// 加 sub element 到 host 订阅集合, 第一次启用 + subclass WndProc, 然后应用 region.
+// 加 sub element 到 host 订阅集合, 第一次启用 + subclass WndProc, 然后应用 accent.
+//
+// 冷启动 (host 还没 ShowWindow) → *不要*立即装 accent: DWM 会立刻把 host 标
+// "per-pixel alpha 透 backdrop", 此时 backbuffer 还没被 XCGUI 写过 = alpha=0,
+// ShowWindow 后第一帧 composite = 整窗 backdrop blur, 几十~两百 ms 后 XCGUI
+// 首帧 paint 完成才"塌缩"成正确画面 → 视觉就是用户截图的整窗闪一下.
+//
+// 修复: 仅 subclass + 标 pendingApply, 真实 SetWindowCompositionAttribute
+// 推迟到 host 首次 WM_PAINT 之后 + PostMessage 延一拍才做. 届时 backbuffer
+// 已被 XCGUI 填成正确 alpha mask, DWM 第一次 composite 直接出对的画面.
+//
+// host 已可见: 跳过延迟逻辑, 直接装 — 后挂的 sub 早过了危险窗口.
 static bool XBlur_AcquireHostBlur(HWND host, HELE hEle){
 	if (!host || !::IsWindow(host) || !hEle) return false;
 	std::lock_guard<std::mutex> lk(g_hostBlurMutex);
@@ -300,9 +352,21 @@ static bool XBlur_AcquireHostBlur(HWND host, HELE hEle){
 	bool firstTime = s.subs.empty();
 	s.subs.insert(hEle);
 	if (firstTime){
-		// subclass WndProc 处理 WM_ERASEBKGND.
+		// subclass WndProc 处理 WM_ERASEBKGND / WM_PAINT 后置 / 自定义消息.
 		s.origWndProc = (WNDPROC)::SetWindowLongPtrW(host, GWLP_WNDPROC,
 			(LONG_PTR)XBlur_HostSubclassWndProc);
+
+		if (!::IsWindowVisible(host)){
+			// Cold open: 推迟装 accent. 乐观把 enabled 标 true 让 caller
+			// m_acrylicApplied 一开始就反映"我打算装"; 真失败 (老 OS) 时
+			// 首帧后 ApplyHostBlur_Locked 会回写 false.
+			s.pendingApply = true;
+			s.enabled      = true;
+			return true;
+		}
+	} else if (s.pendingApply){
+		// 第二个 sub 在首帧前进来, 保持 deferred 计划, 不立刻装.
+		return s.enabled;
 	}
 	XBlur_ApplyHostBlur_Locked(host);
 	return s.enabled;
