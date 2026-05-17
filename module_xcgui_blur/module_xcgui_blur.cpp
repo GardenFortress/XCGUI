@@ -607,10 +607,27 @@ void CXBlur::AttachInternal(HELE hEle, bool owned){
 	// 仅在 D2D 模式挂 ACCENT_ACRYLIC. GDI 模式下 XCGUI 不写 per-pixel
 	// alpha, ACCENT 会把 element 外的全窗区域都透为 backdrop, 出现
 	// halo 伪影. GDI 模式下退化为 tint+border 装饰层.
+	//
+	// 另外: 宿主窗口已经是 per-pixel alpha 模式 (window_transparent_shaped /
+	// window_transparent_shadow) 或 color-key 透明 (window_transparent_simple)
+	// 时, *不挂* ACCENT_ACRYLIC. 原因:
+	//   1) shaped/shadow 窗口的 alpha 通道含义是 "本窗对桌面的 per-pixel
+	//      可见度", 而 ACCENT_ACRYLIC 把同一通道复用成 "本窗对 acrylic
+	//      backdrop 的混合权重". 两者语义冲突, 叠在一起 DWM 会按 acrylic
+	//      规则去混 alpha != 0/255 的中间值, 让用户给元素设的圆角外角落
+	//      ( CXBlur 元素 bounding box 减去圆角 path 那 4 块 ) 出现"半透明
+	//      非圆角区域"的伪影 (issue: shaped + 圆角 → 角落看上去有半透矩形).
+	//   2) simple 是色键透明, ACCENT 路径不识别色键, 一挂会破坏色键效果.
+	//   3) win7 模式当前 XCGUI 也不启用, 不必干预.
+	// 这些模式下 CXBlur 退化为"tint + 圆角 + 边框"装饰层, 与 GDI 兜底相同.
 	HWND host = FindHostHwnd();
 	if (host){
 		m_hostHwnd = host;  // 记录 host, Detach 时释放
-		if (XC_IsEnableD2D()){
+		HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)hEle);
+		window_transparent_ wt = hxw ? XWnd_GetTransparentType(hxw)
+		                             : window_transparent_false;
+		bool hostIsOpaque = (wt == window_transparent_false);
+		if (XC_IsEnableD2D() && hostIsOpaque){
 			m_acrylicApplied = XBlur_AcquireHostBlur(host, hEle);
 		}
 	}
@@ -930,18 +947,33 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 		// 一次构造圆角几何, fill / clip / 都共用
 		ID2D1Geometry* pGeom = XBlur_CreateCornerGeometry(pFac, rfEle, tl, tr, br, bl);
 
-		// 1) COPY blend 把 element 区域像素 alpha 设成 tint.alpha (~51 / 20%):
-		//    displayed = tint_rgb*α + backdrop_blur*(1-α), 经典 Win11 acrylic 公式.
+		// 1) tint 填充. 两条路径:
+		//    a) m_acrylicApplied = TRUE  (普通不透明窗 + D2D + 系统支持 acrylic):
+		//       用 D2D1_PRIMITIVE_BLEND_COPY 把元素圆角内像素 alpha 直接覆盖
+		//       为 tint.alpha (~51 / 20%), 让 DWM 经典 Win11 acrylic 公式
+		//       "displayed = tint_rgb*α + backdrop_blur*(1-α)" 正确出后景.
+		//    b) m_acrylicApplied = FALSE (shaped/shadow/simple 透明窗, 或老 OS,
+		//       或 D2D 1.0 fallback): 用默认 SOURCE_OVER 把 tint 半透明叠在
+		//       元素客户区上, 不动 alpha 通道. 关键: 不能再用 COPY blend, 否则
+		//       会把圆角 path 内 alpha 强制写成 51 (=20%), 在 shaped 窗口里
+		//       这一片就变 80% 透明 (能透出桌面), 而圆角外角落仍然保留 XCGUI
+		//       原 alpha → 角落看上去半透矩形, 圆角内"亚克力"反而是空洞,
+		//       视觉上正好是用户报的 issue.
 		ID2D1SolidColorBrush* pTint = NULL;
 		dc->CreateSolidColorBrush(
 			D2D1::ColorF(GetRGBA_R(tc) / 255.0f, GetRGBA_G(tc) / 255.0f,
 			             GetRGBA_B(tc) / 255.0f, ta / 255.0f),
 			&pTint);
 		if (pTint && pGeom){
-			D2D1_PRIMITIVE_BLEND oldBlend = dc->GetPrimitiveBlend();
-			dc->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
-			dc->FillGeometry(pGeom, pTint);
-			dc->SetPrimitiveBlend(oldBlend);
+			if (m_acrylicApplied){
+				D2D1_PRIMITIVE_BLEND oldBlend = dc->GetPrimitiveBlend();
+				dc->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
+				dc->FillGeometry(pGeom, pTint);
+				dc->SetPrimitiveBlend(oldBlend);
+			} else {
+				// SOURCE_OVER (D2D 默认), 不改 alpha 通道, 与 OnPaintGdi 同语义.
+				dc->FillGeometry(pGeom, pTint);
+			}
 		}
 		SafeRelease(pTint);
 
