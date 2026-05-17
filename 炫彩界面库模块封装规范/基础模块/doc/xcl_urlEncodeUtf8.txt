@@ -1,0 +1,8 @@
+﻿//@示例  
+文本型A url_utf8 = U"www.xcgui.com/doc?type=炫语言"
+文本型A 结果 = URL编码UTF8(url_utf8)
+调试输出(结果) //A"www.xcgui.com%2Fdoc%3Ftype%3D%E7%82%AB%E8%AF%AD%E8%A8%80"
+
+文本型A 结果_utf8 = URL解码UTF8(结果) //返回UTF8编码字符串, 所以需要转码
+调试输出(U2A(结果_utf8)) //A"www.xcgui.com/doc?type=炫语言"
+	

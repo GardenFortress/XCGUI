@@ -1,0 +1,8 @@
+﻿//@示例  
+双浮点型 y = 1.0
+双浮点型 x = 1.0
+// 调用 atan2 函数计算极角
+双浮点型 angle_rad = 取反正切2(y, x)
+// 将弧度值转换为角度值
+双浮点型 angle_deg = angle_rad * (180.0 / XCL_PI)
+调试输出格式化("点 (%lf, %lf) 相对于原点的极角约为 %lf 弧度，即 %lf 度。\n", x, y, angle_rad, angle_deg)

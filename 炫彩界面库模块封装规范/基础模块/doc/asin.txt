@@ -1,0 +1,7 @@
+﻿//@示例  
+双浮点型 sin_value = 0.5f   // 定义一个正弦值
+// 调用 asin 函数计算反正弦值
+双浮点型 angle_rad = 取反正弦(sin_value)
+// 将弧度值转换为角度值，PI 约为 3.1415926
+双浮点型 angle_deg = angle_rad * (180.0f / 圆周率)
+调试输出格式化("当正弦值为 %f 时，对应的角度约为 %f 弧度，即 %f 度。\n", sin_value, angle_rad, angle_deg)

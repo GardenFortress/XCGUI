@@ -1,0 +1,11 @@
+﻿//@示例  
+// 以弧度表示的角度
+双浮点型 angle_rad = XCL_PI / 6
+// 调用 sin 函数计算正弦值
+双浮点型 sin_value = 取正弦(angle_rad)
+调试输出格式化("角度 %.2f 弧度的正弦值是 %.2f\n", angle_rad, sin_value)
+// 若角度是度表示，先转换为弧度
+双浮点型 angle_deg = 30
+双浮点型 angle_deg_to_rad = angle_deg * (XCL_PI / 180)
+双浮点型 sin_value_from_deg = 取正弦(angle_deg_to_rad)
+调试输出格式化("角度 %.2f 度的正弦值是 %.2f\n", angle_deg, sin_value_from_deg)

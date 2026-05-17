@@ -1,0 +1,11 @@
+﻿//@示例  
+// 定义一个以弧度表示的角度
+双浮点型 angle_rad = XCL_PI / 3
+// 调用 cos 函数计算余弦值
+双浮点型 cos_value = 取余弦(angle_rad)
+调试输出格式化("角度 %.2f 弧度的余弦值是 %.2f\n", angle_rad, cos_value)
+// 如果角度是用度表示的，先转换为弧度
+双浮点型 angle_deg = 60
+双浮点型 angle_deg_to_rad = angle_deg * (XCL_PI / 180)
+双浮点型 cos_value_from_deg = 取余弦(angle_deg_to_rad)
+调试输出格式化("角度 %.2f 度的余弦值是 %.2f\n", angle_deg, cos_value_from_deg)

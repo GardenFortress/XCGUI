@@ -116,6 +116,28 @@ CXBlur::ForceSystemTransparencyOn(FALSE);   // 关 / 还原 (默认值)
 - XCGUI ≥ 2025-12 (`module_xcgui_video` 需要 `XDraw_ConvRect`)
 - FFmpeg dev 包 (仅 `video` / `image` 模块需要)
 
+## 模块封装规范
+
+新增封装模块前请阅读 [`炫彩界面库模块封装规范/模块封装规范.md`](./炫彩界面库模块封装规范/模块封装规范.md). 该文档从现有 4 个生产模块 (`editdw` / `video` / `image` / `blur`) 反向提炼, 后续 AI 协作或人工开发新模块时只读此文即可直接动手.
+
+涵盖内容:
+
+- 文件命名 / 头守卫 / `class CX<功能>` 大驼峰约定
+- 头文件骨架与全套 `@` 标签 (`@模块名称` / `@别名` / `@分组` / `@隐藏` / `@复制文件` / `@lib` / `@src` / `@依赖`)
+- 类层级 (`CXBase` → `CXObjectUI` → `CXEle` / `CXShape` / `CXScrollView`) 与必须实现的 5 段样板 (`GetHXCGUI` override / `operator HELE` / `operator HXCGUI` / `operator=`)
+- D2D 主路径 + GDI 兜底的 `OnPaintImpl` 标准分流代码
+- DPI / `BkInfo` / 多线程 (`BoundedQueue` + `PushTimeout` 防 UI 卡死锁)
+- 事件系统: 通用走 `XEle_RegEventCPP1`, 业务走 C 风格函数指针 + `void*` 用户数据
+- 头文件依赖陷阱 (`d2d1.h` 必须先于 `module_xcgui.h` 否则 `POINTF` 重定义)
+- 资源链接 (`@lib` + `#pragma comment(lib)` 双写) 与运行时 DLL 拷贝
+- 完整 `module_xcgui_demo.h/.cpp` 模板 (可直接 copy-paste 改名)
+- 中文 `@别名` 命名速查表 (避免与父类同名冲突, 例如 `取播放状态` vs `取状态`)
+
+附带依赖 (新模块编译必需, 已打包同目录):
+
+- `基础模块/` — `module_base.h/.cpp` + `xc_mkStr` 字符串工具
+- `炫彩界面库/` — `module_xcgui.h` / `module_xcgui_class.h` / `xcgui_event.h` + `XCGUI.dll/lib` (x86 / x64)
+
 ## 许可证
 
 [Unlicense](LICENSE)

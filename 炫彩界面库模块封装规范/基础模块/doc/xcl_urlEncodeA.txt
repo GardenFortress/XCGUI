@@ -1,0 +1,13 @@
+﻿//@示例  
+文本型A url = A"www.xcgui.com/doc?type=炫语言"
+文本型A 结果 = URL编码A(url)
+调试输出(结果) //A"www.xcgui.com%2Fdoc%3Ftype%3D%E7%82%AB%E8%AF%AD%E8%A8%80"
+
+文本型A 结果2 = URL解码A(结果)
+调试输出(结果2) //A"www.xcgui.com/doc?type=炫语言"
+
+//URL（Uniform Resource Locator）编码，也称为百分号编码（Percent-encoding），
+//是一种将特殊字符转换为特定格式的编码方式。
+//在 URL 中，某些字符具有特殊含义（如 /、?、& 等），
+//如果需要在 URL 中传递包含这些特殊字符的数据，就必须对其进行编码，以避免造成 URL 解析错误。
+//URL 编码使用百分号 % 后跟两位十六进制数来表示特殊字符的 ASCII 码值

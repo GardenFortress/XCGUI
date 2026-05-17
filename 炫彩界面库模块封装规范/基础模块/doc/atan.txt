@@ -1,0 +1,7 @@
+﻿//@示例  
+双浮点型 tan_value = 1.0f
+// 调用 atan 函数计算反正切值
+双浮点型 angle_rad = atan(tan_value)
+// 将弧度值转换为角度值
+双浮点型 angle_deg = angle_rad * (180.0f / XCL_PI)
+调试输出格式化("当正切值为 %f 时，对应的角度约为 %f 弧度，即 %f 度。\n", tan_value, angle_rad, angle_deg)
