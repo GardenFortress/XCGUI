@@ -16,11 +16,17 @@
 //   XInitXCGUI(0) GDI+ 路径 → OnPaintGdi (tint + border, 不画 noise)
 //   XInitXCGUI(1) D2D 路径  → OnPaintD2D (tint + noise + border + 圆角)
 //
-// 系统 acrylic 启用路径 (运行时按 OS 能力降级):
-//   1. Win10 1803+ / Win11: SetWindowCompositionAttribute
-//                            ACCENT_ENABLE_ACRYLICBLURBEHIND  (真 acrylic + tint)
-//   2. Win10 1607 ~ 1709 : ACCENT_ENABLE_BLURBEHIND           (Win10 风 blur)
-//   3. Win7 / Win8 / 8.1 : 不启用 backdrop blur, CXBlur 退化为“仅装饰”.
+// 系统 acrylic 启用路径 (运行时按 OS build number 显式选, 见 XBlur_PickAccentState):
+//   1. Win11 (>= 22000)               : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
+//   2. Win10 1803~1809 (17134~17763)  : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
+//   3. Win10 1903~22H2 (18362~21999)  : ACCENT_ENABLE_BLURBEHIND        (绕开 ACRYLIC 阉割)
+//   4. Win10 1607~1709 (14393~16299)  : ACCENT_ENABLE_BLURBEHIND        (Win10 风 blur)
+//   5. Win7 / Win8 / 8.1 / 老 Win10   : 不启用 backdrop blur, CXBlur 退化为"仅装饰".
+//
+// Win10 1903 起 ACRYLIC 被微软阉割: SetWindowCompositionAttribute 仍返 TRUE 但
+// DWM 不再跑 blur kernel, 只剩透明+tint 且 resize 拉胯, Win10 22H2 仍未修.
+// 不能用 try-ACRYLIC-then-BLURBEHIND 试探 (会成功但不出 blur, 试探发现不了),
+// 必须按 build number 显式选.
 //
 // Win7 / Win8 / 8.1 不走 DwmEnableBlurBehindWindow + BLURREGION:
 //   BLURREGION blur 生效要 host pixel alpha=0, XCGUI 渲染 pipeline
@@ -204,6 +210,48 @@ typedef BOOL (WINAPI* PFN_SetWindowCompositionAttribute)(HWND, _XBlur_WCA_DATA*)
 
 namespace {
 
+// 用 RtlGetVersion 拿真实 OS build (GetVersionEx 在没 manifest 的进程上会撒谎封顶在 6.2).
+// 缓存一次, 进程内不变.
+static DWORD XBlur_GetOsBuild(){
+	static DWORD s_build = 0;
+	if (s_build) return s_build;
+	HMODULE nt = ::GetModuleHandleW(L"ntdll.dll");
+	if (!nt){ s_build = 1; return s_build; }
+	typedef LONG (WINAPI* PFN_RtlGetVersion)(OSVERSIONINFOEXW*);
+	auto pRtl = (PFN_RtlGetVersion)::GetProcAddress(nt, "RtlGetVersion");
+	if (!pRtl){ s_build = 1; return s_build; }
+	OSVERSIONINFOEXW vi = {};
+	vi.dwOSVersionInfoSize = sizeof(vi);
+	if (pRtl(&vi) != 0){ s_build = 1; return s_build; }
+	s_build = vi.dwBuildNumber ? vi.dwBuildNumber : 1;
+	return s_build;
+}
+
+// 按 OS build 挑合适的 ACCENT_STATE.
+//
+// Win10 1903 (build 18362) 起微软 *阉割* 了 ACCENT_ENABLE_ACRYLICBLURBEHIND:
+// SetWindowCompositionAttribute 仍返 TRUE, 但 DWM 不再跑 blur kernel, 只剩
+// 透明 + tint, 而且 resize/move 时窗口刷新有 ~500ms~1s 延迟. 这是系统级
+// regression, Win10 22H2 仍未修. 修复策略: 该 build 段降级到 BLURBEHIND
+// (state=3, Win10 Aero 风格 blur), 它在 22H2 上仍能跑真 blur 且无明显延迟.
+//
+// build 表:
+//   >= 22000           Win11+      → ACRYLIC (真 acrylic)
+//   17134 ~ 17763      Win10 1803~1809 → ACRYLIC (真 acrylic)
+//   18362 ~ 21999      Win10 1903~22H2 → BLURBEHIND (绕开阉割)
+//   14393 ~ 16299      Win10 1607~1709 → BLURBEHIND (无 acrylic)
+//   < 14393            Win10 < 1607 / Win8 / 8.1 / Win7 → DISABLED (装饰层)
+//
+// 返 0 表示走装饰层不调 SetWindowCompositionAttribute.
+static DWORD XBlur_PickAccentState(){
+	DWORD b = XBlur_GetOsBuild();
+	if (b >= 22000)              return XBLUR_ACCENT_ENABLE_ACRYLICBLURBEHIND;
+	if (b >= 17134 && b <= 17763) return XBLUR_ACCENT_ENABLE_ACRYLICBLURBEHIND;
+	if (b >= 18362)              return XBLUR_ACCENT_ENABLE_BLURBEHIND;  // 22H2 等
+	if (b >= 14393)              return XBLUR_ACCENT_ENABLE_BLURBEHIND;  // 1607~1709
+	return 0;
+}
+
 // host HWND 状态: 订阅的 element + hook 前的 WndProc + 标志位.
 struct _XBlur_HostBlurState {
 	std::set<HELE> subs;
@@ -223,14 +271,19 @@ static void XBlur_ApplyHostBlur_Locked(HWND host);
 static constexpr UINT XBLUR_WM_APPLY_ACCENT = WM_APP + 0x4321;
 
 // subclass WndProc:
-//   WM_ERASEBKGND     : 返回 1 阻止 GDI 擦背景 (否则盖掉 acrylic).
-//   WM_PAINT          : 调 orig 让 XCGUI 完成首帧 paint, 之后若 pendingApply
-//                       挂着则 PostMessage(XBLUR_WM_APPLY_ACCENT) 延一拍装 accent.
-//                       此时 backbuffer 已被 XCGUI 填成 opaque BG + element 区
-//                       COPY-blend tint, DWM 下一帧 composite 直接出正确画面,
-//                       跳过"整窗 alpha=0 全 backdrop"那一闪.
-//   XBLUR_WM_APPLY_ACCENT : 执行 ApplyHostBlur_Locked.
-//   WM_NCDESTROY      : 标 destroying, 让 release 跳过 disable accent.
+//   WM_ERASEBKGND        : 返回 1 阻止 GDI 擦背景 (否则盖掉 acrylic).
+//   WM_PAINT             : 调 orig 让 XCGUI 完成首帧 paint, 之后若 pendingApply
+//                          挂着则 PostMessage(XBLUR_WM_APPLY_ACCENT) 延一拍装 accent.
+//                          此时 backbuffer 已被 XCGUI 填成 opaque BG + element 区
+//                          COPY-blend tint, DWM 下一帧 composite 直接出正确画面,
+//                          跳过"整窗 alpha=0 全 backdrop"那一闪.
+//   XBLUR_WM_APPLY_ACCENT: 执行 ApplyHostBlur_Locked.
+//   WM_NCDESTROY         : 标 destroying, 让 release 跳过 disable accent.
+//
+// 注: 不拦 WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE 卸 accent. 之前在 Win10 22H2 上
+// 拖拽 ~1s 延迟是因为旧代码用了被微软阉割的 ACCENT_ACRYLIC, 切到 BLURBEHIND
+// 之后 DWM 走的是另一条 (轻量) 合成路径, 拖拽帧率正常, 不需要这个开销大且会
+// 导致拖拽期间显示纯色的 mitigation.
 static LRESULT CALLBACK XBlur_HostSubclassWndProc(HWND h, UINT m, WPARAM w, LPARAM l){
 	if (m == WM_ERASEBKGND){
 		return 1;
@@ -281,9 +334,9 @@ static LRESULT CALLBACK XBlur_HostSubclassWndProc(HWND h, UINT m, WPARAM w, LPAR
 	return lr;
 }
 
-// 给 host 应用 ACCENT_ACRYLIC. 调用方持锁.
-// Win10 1803+: ACCENT_ENABLE_ACRYLICBLURBEHIND (state=4) = 真 acrylic.
-// 老系统不支持时 fall back 到 ACCENT_ENABLE_BLURBEHIND (state=3) Win10 风格 blur.
+// 调 SetWindowCompositionAttribute 给 host 装一个 ACCENT_STATE.
+// state 由 XBlur_PickAccentState 决定; tintRgba 仅 ACRYLIC 用, BLURBEHIND 忽略.
+// 调用方持 g_hostBlurMutex 锁 (修改 g_hostBlurMap 的路径).
 static bool XBlur_ApplyAccentBlur(HWND host, DWORD accentState, DWORD tintRgba){
 	HMODULE u32 = ::GetModuleHandleW(L"user32.dll");
 	if (!u32) return false;
@@ -302,12 +355,9 @@ static bool XBlur_ApplyAccentBlur(HWND host, DWORD accentState, DWORD tintRgba){
 	return pSet(host, &data) ? true : false;
 }
 
-// 应用 host blur. 按 OS 能力降级:
-//   1. Win10 1803+ : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic + tint).
-//   2. Win10 1607- : ACCENT_ENABLE_BLURBEHIND        (Win10 风格 blur, 无 tint).
-//   3. 其他 OS    : 不走 DwmEnableBlurBehindWindow. 原因见文件头注释:
-//                     XCGUI 渲染 pipeline 拉 alpha 为 255, BLURREGION 造不出
-//                     glass; 只会警示并重绘 tint+border (装饰层).
+// 应用 host blur. 按 XBlur_PickAccentState 决定的 state 装. 不再"先 ACRYLIC
+// 再 BLURBEHIND" 试探 — Win10 1903+ ACRYLIC 调用会成功返 TRUE 但不出 blur,
+// 试探机制无法察觉, 必须按 build number 直接选.
 static void XBlur_ApplyHostBlur_Locked(HWND host){
 	auto it = g_hostBlurMap.find(host);
 	if (it == g_hostBlurMap.end()) return;
@@ -317,19 +367,17 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		return;
 	}
 
-	// 路径 1: ACCENT_ACRYLIC (Win10 1803+)
-	if (XBlur_ApplyAccentBlur(host, XBLUR_ACCENT_ENABLE_ACRYLICBLURBEHIND, 0)){
+	DWORD state = XBlur_PickAccentState();
+	if (state == 0){
+		// 老 OS (Win8/8.1/Win7) / 不支持 SetWindowCompositionAttribute → 装饰层.
+		// XCGUI 渲染 pipeline 拉 alpha 为 255, Aero BLURREGION 造不出 glass.
+		it->second.enabled = false;
+		return;
+	}
+	if (XBlur_ApplyAccentBlur(host, state, 0)){
 		it->second.enabled = true;
 		return;
 	}
-	// 路径 2: ACCENT_BLURBEHIND (Win10 1607+)
-	if (XBlur_ApplyAccentBlur(host, XBLUR_ACCENT_ENABLE_BLURBEHIND, 0)){
-		it->second.enabled = true;
-		return;
-	}
-	// 路径 3: 退化为仅装饰层 (Vista / Win7 / Win8 / 8.1 等 SetWindowCompositionAttribute
-	// 不可用的 OS). Aero 的 BLURREGION + alpha=0 机制需要 HWND surface 保留
-	// 逐像素 alpha, 这与 XCGUI 默认渲染模式冲突 → blur 不会出现, 不上.
 	it->second.enabled = false;
 }
 

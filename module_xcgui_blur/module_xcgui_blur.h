@@ -9,14 +9,17 @@
 //@模块备注  亚克力 / 磨砂玻璃元素. 走 DWM 系统合成路径 (HWND 级 acrylic 后
 //          element 用 alpha 控制透出 backdrop blur), 跟手, 0 帧延迟, 无抓帧.
 //
-//          路线选择 (运行时按 OS 能力降级, 无需调用方关心):
-//            1) Win10 1803+ / Win11    : SetWindowCompositionAttribute
-//                                        ACCENT_ENABLE_ACRYLICBLURBEHIND
-//            2) Win10 1607 ~ 1709      : ACCENT_ENABLE_BLURBEHIND (无 tint)
-//            3) Win7 / Win8 / 8.1 / Vista: 退化为"仅装饰" (tint + border + 圆角).
-//                                          XCGUI 渲染管线不保留 per-pixel alpha,
-//                                          Win7 Aero BLURREGION 路径在实际场景下
-//                                          不会出 blur, 故跟 Win8/8.1 一档处理.
+//          路线选择 (运行时按 OS build number 显式选, 无需调用方关心):
+//            1) Win11 (build >= 22000)         : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
+//            2) Win10 1803~1809 (17134~17763)  : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
+//            3) Win10 1903~22H2 (18362~21999)  : ACCENT_ENABLE_BLURBEHIND        (绕开 ACRYLIC 阉割)
+//                 微软在 1903 起把 ACRYLIC 的 blur kernel 关掉了, 仍返 TRUE 但
+//                 只剩透明+tint 且 resize 卡顿. 走 BLURBEHIND 取 Win10 风格
+//                 mild blur (无 tint) 是该段唯一可用方案.
+//            4) Win10 1607~1709 (14393~16299)  : ACCENT_ENABLE_BLURBEHIND        (Win10 风 blur)
+//            5) Win7 / Win8 / 8.1 / Vista       : 退化为"仅装饰" (tint+border+圆角).
+//                 XCGUI 渲染管线不保留 per-pixel alpha, Win7 Aero BLURREGION 在
+//                 实际场景下不会出 blur, 故跟 Win8/8.1 一档处理.
 //
 //          重要权衡 (主动声明给调用者):
 //            * 受 Windows 个性化 - 颜色 - 透明效果 开关影响. 用户关闭时
