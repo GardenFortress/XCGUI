@@ -36,6 +36,11 @@
 //          兼容性:
 //            * 同时兼容 XInitXCGUI(TRUE) D2D 主路径 与 XInitXCGUI(FALSE) GDI+ 兜底.
 //            * 阴影 DIB 渲染走 GDI+ (BoxBlur + AddRoundedRectPath), Win7 SP1+ 可用.
+//            * 与 CXBlur (DWM acrylic) 不能在同窗"halo + acrylic"同时生效 — DWM
+//              架构限制 (alpha 通道在 shaped 与 acrylic 路径之间二选一). 用户在
+//              attach 之后通过 XWnd_SetTransparentType 切走 shaped 时, 本类自动
+//              进入降级路径: ClearPadding + 仅填内圈 bg (无 halo / 无描边), 让出
+//              alpha 通道给 acrylic. 切回 shaped 下一帧自动恢复完整阴影.
 //
 // ============================================================================
 //  ★ 使用 ★ — AttachToWnd 即可, SetTransparentType / XE_PAINT 自绘圆角填充
@@ -128,6 +133,14 @@ public:
 //      + padding + WM_PAINT / NCHITTEST / SIZE / DPICHANGED 事件.
 //      主窗原状态 (transparent type/alpha, padding, layout) 被保存,
 //      Detach 时还原. 与 XCGUI EnableDragBorder / EnableMaxWindow / EnableDragCaption 兼容.
+//
+//      *与 CXBlur (DWM acrylic) 共存说明*:
+//      本类强制把宿主切到 window_transparent_shaped (halo alpha 通道需要).
+//      若 attach 之后调用方再 XWnd_SetTransparentType 把宿主切回 false / shadow /
+//      simple (例如想让 CXBlur 的 acrylic 生效), 本类自动 *降级* 为 "无 halo, 无
+//      描边, 仅填内圈 bg" — 因为 DWM 架构限制 alpha 通道在 shaped 与 acrylic 路径
+//      间只能二选一. 切回 shaped 下一帧自动恢复完整阴影. 用户通过切换 transparent
+//      type 自由选择 "此刻要 acrylic blur 还是要 shadow halo".
 //@参数 hWnd 目标窗口.
 //@返回 TRUE 成功, FALSE 句柄非法或事件注册失败.
 //@别名  附加窗口()
@@ -297,6 +310,58 @@ public:
 //@别名  立即刷新()
     void Invalidate();
 
+    // ===== Snap 控制 =====
+//@备注 启用 / 禁用本窗的 *系统 snap 阻止* 功能. **默认 TRUE — snap 被阻止**.
+//      *(注意: 与 CXBlur::EnableSnap 语义相反, 本类默认就阻止 snap. 因为 snap
+//       状态会让 CXShadow 必须 ClearPadding 收起阴影, 视觉打断, 多数用户不希
+//       望出现这种状态.)*
+//
+//      参数语义:
+//        * bEnable = TRUE  → **阻止 snap** (默认). 窗口无法进入 snap / 最大化.
+//        * bEnable = FALSE → 允许 snap. 系统行为, 与一般窗口一致.
+//
+//      *bEnable=TRUE 的实现策略 (Win 没有 per-window snap 关闭官方 API,
+//      用三件套组合)*:
+//        1. strip WS_MAXIMIZEBOX → 杀 Win11 Snap Layouts 飞出框 (悬停最大
+//           化按钮的小窗格选择). *副作用: 最大化按钮变灰不可点.*
+//        2. WM_WINDOWPOSCHANGING 几何过滤 → 检测目标矩形是否匹配 snap
+//           layout (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE
+//           阻止落位 (拦 Aero Snap 拖标题到屏幕边).
+//        3. WM_SYSCOMMAND 吞 SC_MAXIMIZE → 拦键盘 Win+Up 最大化, 标题栏
+//           双击最大化, 系统菜单 "最大化".
+//
+//      *bEnable=TRUE 的额外性能收益*: 既然 snap 不可能发生, SyncWindowState
+//      会跳过 IsWindowSnapped() 计算 + snap-padding 切换逻辑 (m_isSnapped 强
+//      制为 false), 省去每次 WM_SIZE / WM_WINDOWPOSCHANGED 的 GetWindowRect /
+//      MonitorFromWindow / GetMonitorInfo 调用.
+//
+//      *副作用 / 限制*:
+//        * 最大化按钮变灰. 本接口与 "用户期望最大化窗" 互斥, 二选一.
+//        * snap 几何检测有 2 px 容差, 用户手动恰好 resize 到 1/2 屏 / 1/4
+//          屏尺寸会被误拦. 概率极低 (要求 4 边都对齐 work area).
+//        * 触摸板三指手势 / 屏幕投递的 snap 不走以上路径, 拦不住.
+//          (Win 系统 hook, 接口层无法干预.)
+//
+//      *bEnable=FALSE (从 TRUE 切回)*: 还原 WS_MAXIMIZEBOX 到 strip 前状态.
+//      拦截过滤逻辑空转, IsWindowSnapped 计算恢复.
+//
+//      *Detach 行为*: Detach 时本类自动还原 attach 前的 WS_MAXIMIZEBOX 状态,
+//      用户不需要在 Detach 前显式 EnableSnap(FALSE).
+//
+//      *attach 时序*:
+//        * AttachToWnd 之前调本接口 → 仅记忆设置, 实际 strip 在 AttachToWnd 完成.
+//        * AttachToWnd 之后调本接口 → 立即生效.
+//
+//      返回 void (设置不会失败; 旧 OS 上 SetWindowLong 总成功).
+//@参数 bEnable TRUE 阻止 snap (默认), FALSE 允许 snap (恢复系统行为).
+//@别名  启用Snap阻止()
+    void EnableSnap(BOOL bEnable);
+
+//@备注 取当前 snap 阻止启用状态. 默认 TRUE (阻止). 返 EnableSnap 最近一次
+//      参数; 与 EnableSnap 参数语义保持一致 (TRUE = 阻止 snap).
+//@别名  是否阻止Snap()
+    BOOL IsSnapEnabled() const;
+
     //@隐藏{
 private:
     // ===== 绑定状态 =====
@@ -317,6 +382,23 @@ private:
     bool    m_inSizeMove    = false;      // 主窗 WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE 区间.
                                           // 区间内: 阴影用 1-pass box blur 快速通道,
                                           // 退出后再渲一帧高质量 (3-pass ≈ 高斯).
+
+    // ===== Snap 控制 (EnableSnap / IsSnapEnabled) =====
+    // m_snapDisabled = true (默认) → 阻止 snap (与 EnableSnap(TRUE) 对应).
+    //                                strip WS_MAXIMIZEBOX + 子类 proc 过滤
+    //                                WM_WINDOWPOSCHANGING + 吞 SC_MAXIMIZE +
+    //                                SyncWindowState 跳过 IsWindowSnapped 计算.
+    // m_snapDisabled = false           → snap 系统默认行为.
+    //
+    // *与 CXBlur 语义反转*: CXBlur 的 m_snapEnabled=true 表示 snap *允许*,
+    // 本类的 m_snapDisabled=true 表示 snap *被阻止*. 默认值都是 true 但含义
+    // 相反 — 本类默认阻止 snap, CXBlur 默认允许. 详见 EnableSnap 文档.
+    //
+    // atomic 因为 EnableSnap 可能被 UI 线程外的线程调 (与 SetTheme 一致策略),
+    // 子类 proc 在 Win32 消息派发 (UI) 线程读, 共享访问需 atomic 防 tearing.
+    std::atomic<bool> m_snapDisabled        {true};
+    bool              m_maxBoxSaved         = false;   // 是否已 strip WS_MAXIMIZEBOX
+    bool              m_maxBoxOriginallySet = false;   // strip 前 WS_MAXIMIZEBOX 是否本来置位
 
     // ===== 主窗原状态备份 (Detach 还原用) =====
     bool    m_saved             = false;      // 是否已抓取过原状态
@@ -434,6 +516,12 @@ private:
     // 主窗属性接管/还原 (不动 EnableDrawBk — 靠 OnWndPaint 设 pbHandled=TRUE 跳默认背景填充)
     void CaptureMainStyles();    // Attach 第一次调: 抓 transparent / padding / layout 原值
     void RestoreMainStyles();    // Detach: 还原全部
+
+    // Snap 禁用: WS_MAXIMIZEBOX strip / restore. 本类调用方 (EnableSnap / Detach)
+    // 在主线程, *不持任何锁*, 所以可以直接 SetWindowPos(SWP_FRAMECHANGED) — 与
+    // CXBlur 的死锁回避不同, 这里没有共享状态需要锁.
+    void StripMaxBox();          // 记录原态 + 关 WS_MAXIMIZEBOX (n-op 若已 strip)
+    void RestoreMaxBox();        // 还原 WS_MAXIMIZEBOX 到 strip 前 (n-op 若没 strip)
 
     // ===== DIB 管理 =====
     BOOL EnsureDib(int w, int h);

@@ -17,6 +17,14 @@
 //       EnableDrawBk 不动 — OnWndPaint 里设 *pbHandled = TRUE 就足以跳过默认背景填充,
 //       关闭它反而会让 XCGUI 跳过整个画布派发, 窗变全透.
 //
+//   * 与 CXBlur (DWM acrylic) 共存 — *优雅降级* (见 OnWndPaintImpl 详注):
+//       CXShadow halo 与 DWM acrylic 都使用同一 alpha 通道 (前者: per-pixel
+//       透桌面; 后者: 透 acrylic blur), 二者在同窗 alpha<255 像素上语义冲突,
+//       DWM 架构层无法兼得. CXShadow 每帧检测宿主透明类型: 非 shaped 时
+//       ClearPadding + 仅填内圈 bg (无 halo / 无描边), 让出舞台给 acrylic;
+//       切回 shaped 时下一帧自动恢复完整阴影. *用户* 通过 XWnd_SetTransparentType
+//       自由切换决定此刻要 blur 还是要 shadow.
+//
 //   * 钩 XWM_WINDPROC + WM_PAINT:
 //       - WM_PAINT: padding 外圈画 shadow halo (DIB → HIMAGE → XDraw_ImageEx);
 //                   padding 内圈画 inner bg (圆角填充) + 1px 圆角 AA 描边.
@@ -477,6 +485,13 @@ BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
         ApplyThemePreset(t);
     }
 
+    // 7) Snap 阻止: m_snapDisabled 默认 true (本类默认阻止 snap, 与 CXBlur 反转).
+    //    用户若在 attach 前调过 EnableSnap(FALSE) 关闭阻止, m_snapDisabled=false 跳过.
+    //    否则 (默认 / EnableSnap(TRUE)) 此处 strip WS_MAXIMIZEBOX.
+    if (m_snapDisabled.load()){
+        StripMaxBox();
+    }
+
     // 触发首次重绘 (主窗可能还未显示, XCGUI 会在首次 show 时走 WM_PAINT)
     ::XWnd_Redraw(hWnd, FALSE);
     return TRUE;
@@ -545,10 +560,69 @@ constexpr UINT_PTR kCXShadowSubclassId  = 0x58536864UL;  // 'XShd'
 #define XSHADOW_DEBUG_NCHIT 0
 #endif
 
+// ----- Snap target geometry detection -----
+// 与 module_xcgui_blur.cpp 的 XBlur_IsSnapTargetGeom 同语义 (容差 2 px). 检测
+// WINDOWPOS 的目标矩形是否匹配 snap layout (full / 左右半屏 / 上下半屏 / 四角).
+// EnableSnap(FALSE) 时, 在 WM_WINDOWPOSCHANGING 用此函数 + SWP_NOMOVE|SWP_NOSIZE
+// 阻止 Aero Snap 落位.
+static bool _CXShadow_IsSnapTargetGeom(const WINDOWPOS* wp, HWND raw){
+    if (!wp || !raw) return false;
+    HMONITOR hMon = ::MonitorFromWindow(raw, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!hMon || !::GetMonitorInfoW(hMon, &mi)) return false;
+    const RECT& wa = mi.rcWork;
+    int waW = wa.right - wa.left;
+    int waH = wa.bottom - wa.top;
+    if (waW <= 0 || waH <= 0) return false;
+
+    auto eq = [](int a, int b){ int d = a - b; return (d < 0 ? -d : d) <= 2; };
+    int newL = wp->x;
+    int newT = wp->y;
+    int newR = wp->x + wp->cx;
+    int newB = wp->y + wp->cy;
+
+    bool atL = eq(newL, wa.left);
+    bool atT = eq(newT, wa.top);
+    bool atR = eq(newR, wa.right);
+    bool atB = eq(newB, wa.bottom);
+
+    bool fullW = eq(wp->cx, waW);
+    bool fullH = eq(wp->cy, waH);
+    bool halfW = eq(wp->cx, waW / 2);
+    bool halfH = eq(wp->cy, waH / 2);
+
+    if (fullW && fullH && atL && atT) return true;            // 全屏 = maximize
+    if (halfW && fullH && (atL || atR) && atT && atB) return true;  // 左/右半屏
+    if (fullW && halfH && atL && atR && (atT || atB)) return true;  // 上/下半屏
+    if (halfW && halfH && (atL || atR) && (atT || atB)) return true;// 四角
+    return false;
+}
+
 static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
     HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
+    // ----- Snap 阻止拦截 (EnableSnap(TRUE), 默认开启) -----
+    // 在子类 proc 处理, 比 XCGUI wndproc 更靠前 — Aero Snap / SC_MAXIMIZE 在到达
+    // XCGUI / DefWindowProc 之前就被拦截或修改.
+    // *与 CXBlur 反转*: 这里 IsSnapEnabled()=TRUE 表示 snap 被阻止 (本类语义).
+    if (msg == WM_WINDOWPOSCHANGING && dwRefData){
+        CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
+        if (p->IsSnapEnabled()){
+            WINDOWPOS* wpos = reinterpret_cast<WINDOWPOS*>(lp);
+            if (wpos && _CXShadow_IsSnapTargetGeom(wpos, hwnd)){
+                wpos->flags |= SWP_NOMOVE | SWP_NOSIZE;
+            }
+        }
+        // fall through to DefSubclassProc — 用修改后的 wpos 让消息链继续
+    }
+    if (msg == WM_SYSCOMMAND && dwRefData){
+        CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
+        if (p->IsSnapEnabled() && (wp & 0xFFF0) == SC_MAXIMIZE){
+            return 0;   // 直接 swallow, 不调 DefSubclassProc
+        }
+    }
+
     if (msg == WM_NCHITTEST){
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
         if (p){
@@ -805,6 +879,9 @@ int CXShadow::OnWndProcImpl(HWINDOW hWnd, UINT msg,
         ReleaseShadowImage();
         FreeDib();
         m_saved = false;   // 别再尝试 Detach 时还原 — 主窗已死
+        // Snap 控制状态: 主窗已死, 不再 SetWindowLong, 仅清 flag.
+        m_maxBoxSaved         = false;
+        m_maxBoxOriginallySet = false;
         break;
     }
     (void)hWnd;
@@ -1362,7 +1439,70 @@ void CXShadow::RestoreMainStyles(){
     ::XWnd_EnableLayout(m_hAttachedWnd, m_savedLayout);
     // 不需恢复 EnableDrawBk — 本类从未修改它.
 
+    // Snap 控制: 还原 WS_MAXIMIZEBOX (若 EnableSnap(FALSE) 期间 strip 过).
+    // RestoreMaxBox 内部对 "未 strip" 是 no-op, 安全调用.
+    RestoreMaxBox();
+
     m_curPadL = m_curPadT = m_curPadR = m_curPadB = 0;
+}
+
+//============================================================================
+// Snap 禁用支撑函数 (StripMaxBox / RestoreMaxBox / EnableSnap / IsSnapEnabled)
+//
+// 与 CXBlur 不同: CXShadow 没有共享 mutex 保护的状态机, 所有访问都通过 this
+// 指针 (实例级), 主线程顺序执行. 因此 SetWindowPos(SWP_FRAMECHANGED) 即使
+// 同步派发 WM_WINDOWPOSCHANGING 回我们的子类 proc, 也不会有重入死锁问题 —
+// 子类 proc 只读 m_snapDisabled (atomic), 不重入 EnableSnap.
+//============================================================================
+void CXShadow::StripMaxBox(){
+    if (m_maxBoxSaved) return;
+    if (!m_hMainHwnd || !::IsWindow(m_hMainHwnd)) return;
+    LONG s = ::GetWindowLongW(m_hMainHwnd, GWL_STYLE);
+    m_maxBoxOriginallySet = (s & WS_MAXIMIZEBOX) != 0;
+    m_maxBoxSaved = true;
+    if (!m_maxBoxOriginallySet) return;     // 没 MAXIMIZEBOX, 不动
+    ::SetWindowLongW(m_hMainHwnd, GWL_STYLE, s & ~WS_MAXIMIZEBOX);
+    // SWP_FRAMECHANGED 让 USER32 重画标题栏按钮 (最大化按钮立刻变灰).
+    ::SetWindowPos(m_hMainHwnd, NULL, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void CXShadow::RestoreMaxBox(){
+    if (!m_maxBoxSaved) return;
+    bool wasSet = m_maxBoxOriginallySet;
+    m_maxBoxSaved         = false;
+    m_maxBoxOriginallySet = false;
+    if (!wasSet) return;                    // strip 时本来就没 MAXIMIZEBOX
+    if (!m_hMainHwnd || !::IsWindow(m_hMainHwnd)) return;
+    LONG s = ::GetWindowLongW(m_hMainHwnd, GWL_STYLE);
+    ::SetWindowLongW(m_hMainHwnd, GWL_STYLE, s | WS_MAXIMIZEBOX);
+    ::SetWindowPos(m_hMainHwnd, NULL, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void CXShadow::EnableSnap(BOOL bEnable){
+    // 语义 (与 CXBlur 反转, 详见头文件 EnableSnap 文档):
+    //   bEnable = TRUE  → 阻止 snap (m_snapDisabled = true).
+    //   bEnable = FALSE → 允许 snap (m_snapDisabled = false, 系统默认行为).
+    bool newVal = (bEnable != FALSE);
+    bool prev   = m_snapDisabled.exchange(newVal);
+    if (prev == newVal) return;             // 无变化, 跳过
+    if (m_hAttachedWnd == NULL) return;     // 还没 attach, 仅记忆 m_snapDisabled,
+                                            // AttachToWnd 时按值 strip
+    if (newVal){
+        StripMaxBox();
+    } else {
+        RestoreMaxBox();
+    }
+    // 切换后立即重算 m_isSnapped — 从 "阻止" 切回 "允许" 时, 当前几何若恰好
+    // 在 snap target 位置, 需要 m_isSnapped=true 触发 ClearPadding; 反之亦然.
+    SyncWindowState();
+}
+
+BOOL CXShadow::IsSnapEnabled() const {
+    return m_snapDisabled.load() ? TRUE : FALSE;
 }
 
 //============================================================================
@@ -1500,7 +1640,11 @@ void CXShadow::SyncWindowState(){
     bool wasSnapped = m_isSnapped;
     m_isMaximized = (::IsZoomed (m_hMainHwnd) != FALSE);
     m_isMinimized = (::IsIconic (m_hMainHwnd) != FALSE);
-    m_isSnapped   = !m_isMaximized && IsWindowSnapped();
+    // EnableSnap(TRUE) (m_snapDisabled=true, 默认) 时 snap 不可能发生 → 跳过
+    // IsWindowSnapped 的 GetWindowRect / MonitorFromWindow / GetMonitorInfo 三连
+    // 调用, m_isSnapped 强制 false. 既省开销也避免误判 (用户手动 resize 到 snap
+    // 几何时 IsWindowSnapped 误返 true).
+    m_isSnapped   = !m_isMaximized && !m_snapDisabled.load() && IsWindowSnapped();
 
     // 真最大化前提: 用户允许最大化 (WS_MAXIMIZEBOX). 否则忽略 SC_MAXIMIZE 模拟态.
     if (m_isMaximized){
@@ -1617,10 +1761,46 @@ int CXShadow::OnWndPaintImpl(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled){
         ForceSubclassToTop();
     }
 
-    if (m_isMaximized){
+    // ===== 与 CXBlur (DWM acrylic) / 用户手动 SetTransparentType 共存的优雅降级 =====
+    //
+    // CXShadow halo 必须在 window_transparent_shaped 模式下渲染:
+    //   - halo 区 alpha<255 像素的语义 = "透出桌面" (per-pixel alpha 合成);
+    //   - 主窗 backbuffer 每帧由 XCGUI 清零, 阴影一次性贴入, 不累积.
+    //
+    // 用户在 attach 之后手动 XWnd_SetTransparentType 切走 shaped (转 false / shadow /
+    // simple), 两个 bug 同时浮出:
+    //   1) 若另有 CXBlur 在同窗挂了 DWM ACCENT_POLICY: alpha 通道被 DWM 复用为
+    //      "透 acrylic blur 度", halo 区被 DWM 渲成 "模糊背景 + 浅色调", 而非阴影.
+    //   2) Opaque 模式下 backbuffer 不带 alpha 也不被清零, 加上我们 *pbHandled=TRUE
+    //      跳过默认背景填充 → 每帧 XDraw_ImageEx SourceOver 把 halo 叠到上一帧之上,
+    //      阴影越叠越深.
+    //
+    // 二者本质都是 DWM 架构层硬限制 (ACCENT_POLICY 是 HWND 级 + alpha 通道语义在
+    // shaped 与 acrylic 之间二选一), 应用层无法 "halo + acrylic" 兼得. 此处选择
+    // *优雅降级*: 检测到非 shaped → ClearPadding + 走最大化态绘制 (仅填内圈 bg,
+    // 无 halo, 无描边). 用户切回 shaped 后下一帧自动恢复完整阴影.
+    //
+    // 性能: XWnd_GetTransparentType 是 XCGUI 内部一次原子读, < 100 ns.
+    // ApplyPadding / ClearPadding 都对 m_curPad* 有早返回, 稳态零开销.
+    bool shapedMode =
+        (::XWnd_GetTransparentType(hWnd) == window_transparent_shaped);
+
+    if (!shapedMode){
+        // 降级路径. ClearPadding 幂等 (已清时 no-op), 仅首次切入触发一次 SetPadding.
+        ClearPadding();
         DrawMaximizedPaint(hDraw, cw, ch);
     } else {
-        DrawNormalPaint(hDraw, cw, ch);
+        // 防御性 ApplyPadding: 上一帧若处于降级状态把 padding 清掉了, 此处恢复.
+        // 仅在 *正常态* (非 max/snap) 调用 — max/snap 由 SyncWindowState 主动维持
+        // padding=0, 不能在这里把 padding 强行写回去 (否则 snap 时阴影会重新出现).
+        if (!m_isMaximized && !m_isSnapped){
+            ApplyPadding();   // 内部对 m_curPad* 幂等
+        }
+        if (m_isMaximized){
+            DrawMaximizedPaint(hDraw, cw, ch);
+        } else {
+            DrawNormalPaint(hDraw, cw, ch);
+        }
     }
     // pbHandled = TRUE: 告诉 XCGUI "背景我画了, 不要再默认填色".
     // XCGUI 还会继续走后面的子元素递归绘制 (与 pbHandled 无关).
