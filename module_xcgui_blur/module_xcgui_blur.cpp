@@ -226,7 +226,7 @@ static DWORD XBlur_GetOsBuild(){
 	s_build = vi.dwBuildNumber ? vi.dwBuildNumber : 1;
 	return s_build;
 }
-
+	
 // 按 OS build 挑合适的 ACCENT_STATE.
 //
 // Win10 1903 (build 18362) 起微软 *阉割* 了 ACCENT_ENABLE_ACRYLICBLURBEHIND:
@@ -851,8 +851,37 @@ HWND CXBlur::FindHostHwnd() const {
 //============================================================================
 // 元素事件实现
 //============================================================================
-int CXBlur::OnPaintImpl(HELE /*hEle*/, HDRAW hDraw, BOOL* pbHandled){
+int CXBlur::OnPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
 	if (!hDraw) return 0;
+
+	// === CXShadow 兼容性 runtime 检测 ===========================================
+	// 场景: 用户先 CXBlur::AttachToEle (装上 DWM ACCENT_ACRYLIC) → 之后 CXShadow::
+	// AttachToWnd 把宿主窗切到 window_transparent_shaped. 两个模块都在用宿主窗的
+	// alpha 通道, 但语义完全冲突:
+	//   * shaped 模式: alpha<255 像素 = "透出桌面" (shadow halo 渐变化淡出)
+	//   * DWM acrylic: alpha<255 像素 = "透出 blur backdrop" (DWM 把同一通道复用)
+	// 结果: shadow halo 区被 DWM 当成请求 acrylic blur, 用户视觉上看到
+	// "shadow 区也带半透模糊"的 bug.
+	//
+	// DWM acrylic 是 HWND 级, 无 per-region 控制, 没法只让 inner 元素区透 blur
+	// 而 shadow halo 区不透. 唯一可行 (无新架构) 方案是 host 变 shaped 后立即
+	// 释放 acrylic, 让 CXBlur 退化为 tint+border 装饰层 (与已 shaped 窗口 attach
+	// 顺序 A / GDI 模式 / 老 OS 一致).
+	//
+	// 顺序无关: attach 时已经检查过一次, 这里再每帧检查一次, 让 "后 attach
+	// CXShadow" 也能正确触发释放. 检查极轻量 (一次原子读 + 一次 mutex map 查询).
+	if (m_acrylicApplied && m_hostHwnd){
+		HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)hEle);
+		if (hxw){
+			window_transparent_ wt = XWnd_GetTransparentType(hxw);
+			if (wt != window_transparent_false){
+				XBlur_ReleaseHostBlur(m_hostHwnd, hEle);
+				m_acrylicApplied = false;
+				// 不清 m_hostHwnd: Detach / OnDestroy 仍要它做 graceful cleanup.
+			}
+		}
+	}
+	// ============================================================================
 
 	BOOL useD2D = XC_IsEnableD2D();
 	if (useD2D){
@@ -1272,6 +1301,454 @@ BOOL CXBlur::IsSystemAcrylicSupported(){
 	return (SUCCEEDED(DwmIsCompositionEnabled(&enabled)) && enabled) ? TRUE : FALSE;
 }
 BOOL CXBlur::IsSystemAcrylicEnabled() const { return m_acrylicApplied ? TRUE : FALSE; }
+
+//============================================================================
+// EnableNativeShadow / EnableNativeRoundedCorner — host 状态机.
+//
+// 一击式 DwmExtendFrameIntoClientArea / DwmSetWindowAttribute 只能管"此刻",
+// 不能管 host 后续状态变迁. 必须装状态机覆盖 3 个真实问题:
+//
+//   1) Aero snap: 用户拖窗到屏幕边触发系统 snap, 过渡里 DWM 把 frame extension
+//      重置. 松手后窗矩形外圈一片空 — 必须 WM_SIZE 重新 apply.
+//
+//   2) 最大化 (IsZoomed = TRUE): 用户直觉里 "贴满屏幕, 不该有阴影也不该有圆角",
+//      DWM 不会主动关 — 状态机识别并切到 margins=0 + DWMWCP_DONOTROUND, 还原后
+//      切回用户设置.
+//
+//   3) 启动白闪: DwmExtendFrameIntoClientArea 触发后 frame 立刻出现 (圆角 + 阴影),
+//      但 XCGUI / D2D 首帧落后 50~200 ms, 中间窗体内一格白闪. 解法 = DWMWA_CLOAK
+//      在 ShowWindow 前隐窗, 注册 150 ms 定时器揭 cloak.
+//
+// 实现 = 每个 host HWND 一个 NativeFxState + XWM_WINDPROC 钩子, 仅在用户至少
+// 调用过一次 EnableNativeShadow / EnableNativeRoundedCorner 的 HWND 上启用,
+// 不影响其它 CXBlur 实例.
+//============================================================================
+namespace {
+
+struct NativeFxState {
+	bool    shadowEnabled  = false;     // 最近一次 EnableNativeShadow 的值
+	int     cornerPref     = -1;        // 最近一次 EnableNativeRoundedCorner; -1 = 未启用
+	bool    inMaximized    = false;     // IsZoomed 实测; TRUE 时屏蔽 shadow + 强制 donotround
+	bool    cloakRequested = false;     // ShowWindow 前已 cloak, 等定时器揭
+	bool    hookInstalled  = false;     // XWM_WINDPROC 已注册
+	bool    inApply        = false;     // 重入守卫: 防 SetWindowPos(FRAMECHANGED) 触发的递归
+	HWINDOW hWindow        = NULL;
+
+	// ===== Snap 控制 (EnableSnap) =====
+	// snapEnabled = true (默认) → 系统 snap 行为正常.
+	// snapEnabled = false → strip WS_MAXIMIZEBOX + WM_WINDOWPOSCHANGING 过滤 +
+	//                       WM_SYSCOMMAND 吞 SC_MAXIMIZE / Win+方向键 snap.
+	bool    snapEnabled         = true;
+	bool    maxBoxSaved         = false;    // 是否已 strip WS_MAXIMIZEBOX
+	bool    maxBoxOriginallySet = false;    // strip 前 WS_MAXIMIZEBOX 是否本来就置位
+};
+
+static std::mutex                     g_nativeFxMutex;
+static std::map<HWND, NativeFxState>  g_nativeFxMap;
+
+// 揭 cloak 定时器 ID. 数值需与 XCGUI 内部 timer ID 不撞 — XCGUI 用低位区,
+// 这里选高位 magic 值. 150 ms 对 D2D 首帧足够 (D2D init + first FillRectangle
+// 一般 < 100 ms).
+static const UINT_PTR kCXBlurUncloakTimerId = (UINT_PTR)0xCB10A912;
+static const UINT     kCXBlurUncloakDelayMs = 150;
+static const DWORD    kDWMWA_CLOAK                     = 13;
+static const DWORD    kDWMWA_WINDOW_CORNER_PREFERENCE  = 33;
+
+// 真最大化才屏蔽 effective shadow. snap state 不主动判 — DWM 在 snap 下 by
+// design 不画 drop shadow 也不读 corner pref, 我们无论怎么算, 表现都一样,
+// 不必加 snap 检测逻辑 (实测 deferred reapply / NCRP override 均无效, 已删).
+//   参考 MS 官方: Apply rounded corners in desktop apps
+//     https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-rounded-corners
+//     原文: "By design, apps are not rounded when maximized, snapped..."
+static bool XBlur_IsHostMaximized(HWND raw){
+	return raw && ::IsWindow(raw) && (::IsZoomed(raw) != FALSE);
+}
+
+// ---------------- Snap 禁用机制 ----------------------------------------------
+//
+// Win 没有 per-window "禁 snap" 的官方 API. 用三件套组合实现:
+//
+//   1. strip WS_MAXIMIZEBOX  → 杀 Win11 Snap Layouts 飞出框 (悬停最大化按钮).
+//      副作用: 最大化按钮变灰, 系统不响应 SC_MAXIMIZE.
+//   2. WM_WINDOWPOSCHANGING 几何检测 → 拦 Aero Snap 拖边 (用户拖标题到屏幕边).
+//      检测: target rect 几何匹配 snap layout (full / half / quarter) → 设
+//      SWP_NOMOVE | SWP_NOSIZE 阻止落位.
+//   3. WM_SYSCOMMAND 吞 SC_MAXIMIZE / Win+方向键 (键盘 snap 走 SC_MOVE 子命令
+//      0xF030/F032/F034/F036, 这里统一吞掉).
+//
+// 三者必须同时上, 缺一会留 snap 入口.
+
+// 检测 wp 的目标矩形是否是 snap target geometry.
+// 用容差 2 px 防 DPI rounding 误差. 仅匹配 snap layout 标准位置 (左/右半屏 /
+// 上/下半屏 / 四角 / 全屏), 用户手动恰好 resize 到 snap 尺寸 *会* 误伤 (但概率
+// 极低; 容差小 + 同时要求 4 边对齐).
+static bool XBlur_IsSnapTargetGeom(const WINDOWPOS* wp, HWND raw){
+	if (!wp || !raw) return false;
+	HMONITOR hMon = ::MonitorFromWindow(raw, MONITOR_DEFAULTTONEAREST);
+	MONITORINFO mi = { sizeof(mi) };
+	if (!hMon || !::GetMonitorInfoW(hMon, &mi)) return false;
+	const RECT& wa = mi.rcWork;
+	int waW = wa.right - wa.left;
+	int waH = wa.bottom - wa.top;
+	if (waW <= 0 || waH <= 0) return false;
+
+	auto eq = [](int a, int b){ int d = a - b; return (d < 0 ? -d : d) <= 2; };
+	int newL = wp->x;
+	int newT = wp->y;
+	int newR = wp->x + wp->cx;
+	int newB = wp->y + wp->cy;
+
+	bool atL = eq(newL, wa.left);
+	bool atT = eq(newT, wa.top);
+	bool atR = eq(newR, wa.right);
+	bool atB = eq(newB, wa.bottom);
+
+	bool fullW = eq(wp->cx, waW);
+	bool fullH = eq(wp->cy, waH);
+	bool halfW = eq(wp->cx, waW / 2);
+	bool halfH = eq(wp->cy, waH / 2);
+
+	if (fullW && fullH && atL && atT) return true;            // 全屏 = maximize
+	if (halfW && fullH && (atL || atR) && atT && atB) return true;  // 左/右半屏
+	if (fullW && halfH && atL && atR && (atT || atB)) return true;  // 上/下半屏
+	if (halfW && halfH && (atL || atR) && (atT || atB)) return true;// 四角
+	return false;
+}
+
+// 吞掉的 WM_SYSCOMMAND wParam (按 0xFFF0 mask 后比较):
+//   SC_MAXIMIZE  = 0xF030
+//   Win+方向键   = 0xF030 / 0xF120 (snap 模拟) — 实测 Win11 上 SC_MAXIMIZE 与
+//   一些 SC_MOVE 子命令也会被 snap 复用. 简化为 mask 后判定.
+static bool XBlur_IsSnapSysCommand(WPARAM wParam){
+	WPARAM cmd = wParam & 0xFFF0;
+	return cmd == SC_MAXIMIZE;
+}
+
+// strip / restore WS_MAXIMIZEBOX. 持锁 + 锁外 两段:
+//   *_Locked  阶段: 仅 GetWindowLong / SetWindowLong (本身不派发消息), 持锁安全.
+//             返回是否需要锁外 SetWindowPos(SWP_FRAMECHANGED) 通知 USER32 重画
+//             标题栏按钮.
+//   锁外 NotifyFrameChanged: SetWindowPos *同步派发* WM_WINDOWPOSCHANGING 回到
+//             本 wndproc — 必须在锁外调用, 否则二次 lock g_nativeFxMutex 死锁,
+//             DWM hang detection 打 0xc000041d.
+static bool XBlur_StripMaxBox_Locked(HWND raw, NativeFxState& st){
+	if (st.maxBoxSaved) return false;
+	LONG s = ::GetWindowLongW(raw, GWL_STYLE);
+	st.maxBoxOriginallySet = (s & WS_MAXIMIZEBOX) != 0;
+	st.maxBoxSaved = true;
+	if (!st.maxBoxOriginallySet) return false;
+	::SetWindowLongW(raw, GWL_STYLE, s & ~WS_MAXIMIZEBOX);
+	return true;   // 需锁外 NotifyFrameChanged
+}
+
+static bool XBlur_RestoreMaxBox_Locked(HWND raw, NativeFxState& st){
+	if (!st.maxBoxSaved) return false;
+	bool wasSet = st.maxBoxOriginallySet;
+	st.maxBoxSaved         = false;
+	st.maxBoxOriginallySet = false;
+	if (!wasSet) return false;
+	LONG s = ::GetWindowLongW(raw, GWL_STYLE);
+	::SetWindowLongW(raw, GWL_STYLE, s | WS_MAXIMIZEBOX);
+	return true;   // 需锁外 NotifyFrameChanged
+}
+
+// 锁外: 通知 USER32 frame style 变了, 重画标题栏按钮.
+// 同步派发 WM_WINDOWPOSCHANGING / WM_WINDOWPOSCHANGED / WM_NCCALCSIZE 给 wndproc.
+static void XBlur_NotifyFrameChanged(HWND raw){
+	::SetWindowPos(raw, NULL, 0, 0, 0, 0,
+	               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+	               SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+// 算 effective frame/corner → 调 DWM. 调用方持锁.
+// 返回 corner 的 hr (用于 EnableNativeRoundedCorner 透传 OS 兼容性).
+//
+// shadow + frame:
+//   shadowEnabled && !inMaximized → margins={1,1,1,1} 触发 DWM frame + shadow.
+//   否则 → margins=0 (DWM 不画 frame, 走默认渲染).
+// corner:
+//   cornerPref >= 0 → 设 DWMWCP_*. 最大化时强制 DONOTROUND (Win11 by design).
+//   snap 时 DWM 也不读这个值, 但我们仍然 set (空操作 + 离开 snap 立刻生效).
+static HRESULT XBlur_ApplyHostFx_Locked(HWND raw, NativeFxState& st){
+	bool effectiveShadow = st.shadowEnabled && !st.inMaximized;
+	MARGINS m = effectiveShadow ? MARGINS{1, 1, 1, 1} : MARGINS{0, 0, 0, 0};
+	::DwmExtendFrameIntoClientArea(raw, &m);
+
+	HRESULT hrCorner = S_OK;
+	if (st.cornerPref >= 0){
+		DWORD pref = st.inMaximized
+		                ? (DWORD)xblur_corner_donotround
+		                : (DWORD)st.cornerPref;
+		hrCorner = ::DwmSetWindowAttribute(raw, kDWMWA_WINDOW_CORNER_PREFERENCE,
+		                                   &pref, sizeof(pref));
+	}
+	return hrCorner;
+}
+
+// 把 ApplyHostFx 之后, 强制 DWM/USER32 重算 frame & 重新决定阴影.
+//   * SetWindowPos(SWP_FRAMECHANGED | NOMOVE | NOSIZE): 让 USER32 重发
+//     WM_NCCALCSIZE → DWM 顺势刷新 frame tracking, 保证 snap / DPI 切换后
+//     窗外阴影立刻回来.
+//   * NOMOVE | NOSIZE 保证不真改大小, 不引发 WM_SIZE 递归.
+//   * 但 SetWindowPos 仍会发 WM_WINDOWPOSCHANGING / WM_WINDOWPOSCHANGED,
+//     调用方需用 inApply 守卫防止 WM_WINDOWPOSCHANGED 处理器再回来递归.
+static void XBlur_RefreshFrame(HWND raw){
+	::SetWindowPos(raw, NULL, 0, 0, 0, 0,
+	               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+	               SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+// WM_SIZE / WM_WINDOWPOSCHANGED / WM_DPICHANGED 共享的同步路径.
+// 调用方 *无* 持锁. 内部自管锁 + inApply 守卫.
+static void XBlur_SyncHost(HWND raw){
+	bool needRefresh = false;
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto it = g_nativeFxMap.find(raw);
+		if (it == g_nativeFxMap.end()) return;
+		if (it->second.inApply) return;             // 重入守卫
+		it->second.inApply     = true;
+		it->second.inMaximized = XBlur_IsHostMaximized(raw);
+		XBlur_ApplyHostFx_Locked(raw, it->second);
+		// 仅当 shadow 应该出现时才发 SWP_FRAMECHANGED — 避免 max/无 fx 态白发消息.
+		needRefresh = it->second.shadowEnabled && !it->second.inMaximized;
+	}
+	if (needRefresh){
+		XBlur_RefreshFrame(raw);
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto it = g_nativeFxMap.find(raw);
+		if (it != g_nativeFxMap.end()) it->second.inApply = false;
+	}
+}
+
+static int CALLBACK _CXBlur_NativeFxWndProc(HWINDOW hWnd, UINT msg,
+                                            WPARAM wParam, LPARAM lParam,
+                                            BOOL* pbHandled)
+{
+	HWND raw = ::XWnd_GetHWND(hWnd);
+	if (!raw) return 0;
+
+	switch (msg){
+	case WM_SIZE:
+		// SIZE_MAXIMIZED / SIZE_RESTORED → inMaximized 状态切换 + ApplyHostFx.
+		// 普通 resize → DWM 在 max/snap 过渡里会重置 frame extension, 必须每次都
+		// 重 apply (2 个 DWM 调用, 微小开销).
+		XBlur_SyncHost(raw);
+		break;
+
+	case WM_WINDOWPOSCHANGING: {
+		// EnableSnap(FALSE) 时, 检测 wp 目标矩形是否是 snap target geometry —
+		// 若是则覆盖 SWP_NOMOVE | SWP_NOSIZE 阻止落位 (Aero Snap 拖边的拦截点).
+		// snapEnabled=true (默认) 时此分支零开销.
+		WINDOWPOS* wp = (WINDOWPOS*)lParam;
+		if (!wp) break;
+		bool snapBlocked = false;
+		{
+			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+			auto it = g_nativeFxMap.find(raw);
+			if (it != g_nativeFxMap.end() && !it->second.snapEnabled){
+				snapBlocked = true;
+			}
+		}
+		if (snapBlocked && XBlur_IsSnapTargetGeom(wp, raw)){
+			wp->flags |= SWP_NOMOVE | SWP_NOSIZE;
+		}
+		break;
+	}
+
+	case WM_WINDOWPOSCHANGED: {
+		// snap 完成 / restore-from-snap 部分场景只发 WM_WINDOWPOSCHANGED 不发
+		// WM_SIZE (CXShadow 早有此观察). 这里只在 size 真变了才 react —— 避免
+		// 拖动期 spam (WM_WINDOWPOSCHANGED 每像素都触发, 不能盲应用).
+		WINDOWPOS* wp = (WINDOWPOS*)lParam;
+		if (wp && (wp->flags & SWP_NOSIZE) == 0){
+			XBlur_SyncHost(raw);
+		}
+		break;
+	}
+
+	case WM_SYSCOMMAND: {
+		// EnableSnap(FALSE) 时, 吞 SC_MAXIMIZE — 拦键盘 Win+Up 最大化 (Win11
+		// snap 入口之一) + 标题栏双击最大化 + 系统菜单 "最大化". *pbHandled=TRUE
+		// 让 XCGUI 不再下发 DefWindowProc → SC_MAXIMIZE 不会触发系统最大化.
+		// snapEnabled=true (默认) 时此分支零开销.
+		bool snapBlocked = false;
+		{
+			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+			auto it = g_nativeFxMap.find(raw);
+			if (it != g_nativeFxMap.end() && !it->second.snapEnabled){
+				snapBlocked = true;
+			}
+		}
+		if (snapBlocked && XBlur_IsSnapSysCommand(wParam)){
+			if (pbHandled) *pbHandled = TRUE;
+			return 0;
+		}
+		break;
+	}
+
+	case WM_DPICHANGED:
+		// DPI 切换会让 DWM 完全重算 frame, 保险再 sync 一次.
+		XBlur_SyncHost(raw);
+		break;
+
+	case WM_TIMER:
+		if (wParam == kCXBlurUncloakTimerId){
+			::KillTimer(raw, kCXBlurUncloakTimerId);
+			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+			auto it = g_nativeFxMap.find(raw);
+			if (it != g_nativeFxMap.end() && it->second.cloakRequested){
+				BOOL cloak = FALSE;
+				::DwmSetWindowAttribute(raw, kDWMWA_CLOAK, &cloak, sizeof(cloak));
+				it->second.cloakRequested = false;
+			}
+		}
+		break;
+
+	case WM_DESTROY: {
+		// XCGUI 在窗口销毁时会自动清自己的事件订阅表 (见 CXShadow 注释), 这里
+		// 只清理 map. KillTimer 防御性兜底, 已销毁时它静默 no-op.
+		::KillTimer(raw, kCXBlurUncloakTimerId);
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		g_nativeFxMap.erase(raw);
+		break;
+	}
+	}
+	return 0;  // 不拦截, 让 XCGUI 继续派发
+}
+
+}  // anonymous namespace
+
+//============================================================================
+// EnableNativeShadow(HWINDOW, BOOL)
+//============================================================================
+BOOL CXBlur::EnableNativeShadow(HWINDOW hWnd, BOOL bEnable){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+	HWND raw = (HWND)::XWnd_GetHWND(hWnd);
+	if (!raw) return FALSE;
+
+	bool needHookInstall = false;
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto& st = g_nativeFxMap[raw];
+		st.shadowEnabled = (bEnable != FALSE);
+		st.inMaximized   = XBlur_IsHostMaximized(raw);
+		if (!st.hookInstalled){
+			st.hookInstalled = true;
+			st.hWindow       = hWnd;
+			needHookInstall  = true;
+		}
+		XBlur_ApplyHostFx_Locked(raw, st);
+
+		// Cloak 启动 — bug #3 修复. 仅在 (开启 shadow) + (窗未可见) + (尚未 cloak)
+		// 时. cloak 失败 (老 OS / DWM 没启用) 不算错, 跳过.
+		if (bEnable && !::IsWindowVisible(raw) && !st.cloakRequested){
+			BOOL cloak = TRUE;
+			HRESULT hrCloak = ::DwmSetWindowAttribute(raw, kDWMWA_CLOAK,
+			                                          &cloak, sizeof(cloak));
+			if (SUCCEEDED(hrCloak)){
+				st.cloakRequested = true;
+				::SetTimer(raw, kCXBlurUncloakTimerId, kCXBlurUncloakDelayMs, NULL);
+			}
+		}
+	}
+
+	// XWnd_RegEventC1 放锁外 — 避免 XCGUI 内部锁与本 mutex 之间形成顺序依赖.
+	if (needHookInstall){
+		::XWnd_RegEventC1(hWnd, XWM_WINDPROC, (void*)_CXBlur_NativeFxWndProc);
+	}
+	return TRUE;
+}
+
+//============================================================================
+// EnableNativeRoundedCorner(HWINDOW, int)
+//
+// 通过状态机 ApplyHostFx 走 DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE = 33).
+// Win11 21H2+ 接受, 老 OS 返 E_INVALIDARG, 函数透传为 FALSE.
+// xblur_corner_* 枚举值与 DWM 原生 DWMWCP_* 二进制一致 (0/1/2/3).
+//============================================================================
+BOOL CXBlur::EnableNativeRoundedCorner(HWINDOW hWnd, int cornerStyle){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+	HWND raw = (HWND)::XWnd_GetHWND(hWnd);
+	if (!raw) return FALSE;
+
+	bool    needHookInstall = false;
+	HRESULT hrCorner        = S_OK;
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto& st = g_nativeFxMap[raw];
+		st.cornerPref  = cornerStyle;
+		st.inMaximized = XBlur_IsHostMaximized(raw);
+		if (!st.hookInstalled){
+			st.hookInstalled = true;
+			st.hWindow       = hWnd;
+			needHookInstall  = true;
+		}
+		hrCorner = XBlur_ApplyHostFx_Locked(raw, st);
+
+		// 与 EnableNativeShadow 共享 cloak 路径: 用户启用任一 native fx 在窗未可见
+		// 时, 都 cloak 到首帧.
+		if (!::IsWindowVisible(raw) && !st.cloakRequested && (st.shadowEnabled || st.cornerPref >= 0)){
+			BOOL cloak = TRUE;
+			HRESULT hrCloak = ::DwmSetWindowAttribute(raw, kDWMWA_CLOAK,
+			                                          &cloak, sizeof(cloak));
+			if (SUCCEEDED(hrCloak)){
+				st.cloakRequested = true;
+				::SetTimer(raw, kCXBlurUncloakTimerId, kCXBlurUncloakDelayMs, NULL);
+			}
+		}
+	}
+	if (needHookInstall){
+		::XWnd_RegEventC1(hWnd, XWM_WINDPROC, (void*)_CXBlur_NativeFxWndProc);
+	}
+	return SUCCEEDED(hrCorner) ? TRUE : FALSE;
+}
+
+//============================================================================
+// EnableSnap(HWINDOW, BOOL)
+//
+// 启用 / 禁用本窗的系统 snap 行为 (默认启用). 实现策略详见 anonymous namespace
+// "Snap 禁用机制" 注释 — 三件套: strip WS_MAXIMIZEBOX + WM_WINDOWPOSCHANGING
+// 几何过滤 + WM_SYSCOMMAND 吞 SC_MAXIMIZE.
+//============================================================================
+BOOL CXBlur::EnableSnap(HWINDOW hWnd, BOOL bEnable){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+	HWND raw = (HWND)::XWnd_GetHWND(hWnd);
+	if (!raw) return FALSE;
+
+	bool needHookInstall  = false;
+	bool needFrameChanged = false;
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto& st = g_nativeFxMap[raw];
+		bool prev = st.snapEnabled;
+		st.snapEnabled = (bEnable != FALSE);
+		if (!st.hookInstalled){
+			st.hookInstalled = true;
+			st.hWindow       = hWnd;
+			needHookInstall  = true;
+		}
+		if (prev != st.snapEnabled){
+			if (!st.snapEnabled){
+				needFrameChanged = XBlur_StripMaxBox_Locked(raw, st);
+			} else {
+				needFrameChanged = XBlur_RestoreMaxBox_Locked(raw, st);
+			}
+		}
+	}
+	// SetWindowPos *必须* 在锁外 — 它同步派发 WM_WINDOWPOSCHANGING 回本 wndproc,
+	// 在持锁状态下回派会二次 lock g_nativeFxMutex → 死锁 → DWM hang detection
+	// → STATUS_FATAL_USER_CALLBACK_EXCEPTION (0xc000041d) 退出.
+	if (needFrameChanged){
+		XBlur_NotifyFrameChanged(raw);
+	}
+	if (needHookInstall){
+		::XWnd_RegEventC1(hWnd, XWM_WINDPROC, (void*)_CXBlur_NativeFxWndProc);
+	}
+	return TRUE;
+}
 
 //============================================================================
 // ForceSystemTransparencyOn(BOOL) - toggle 强制开启 / 还原 系统透明效果.

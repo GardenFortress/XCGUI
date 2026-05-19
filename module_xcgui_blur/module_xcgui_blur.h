@@ -34,6 +34,27 @@
 //            * AttachToEle   : 接管已存在的元素. 启用所在窗口 acrylic.
 //            * AttachToWnd   : 创建覆盖整个窗口客户区的子元素. 启用窗口 acrylic.
 //          也支持 m_hEle = 用户元素 这种 IDE 式的句柄赋值 (operator=).
+//
+//          另有 两个 HWND 级 的 DWM 渲染选项 (静态接口, 与 ACCENT 正交不干扰):
+//            * EnableNativeRoundedCorner  : *推荐* Win11 21H2+ DWM 原生圆角
+//                                            (DWMWA_WINDOW_CORNER_PREFERENCE).
+//                                            XCGUI 默认窗带 WS_THICKFRAME, DWM
+//                                            会自动给它画 shadow + 描边, 这一个
+//                                            接口设上圆角即可成完整 Win11 视觉.
+//                                            老系统静默失败 (返 FALSE).
+//            * EnableNativeShadow         : *仅在纯 WS_POPUP borderless 窗需要*.
+//                                            走 DwmExtendFrameIntoClientArea 强
+//                                            触发 DWM frame + shadow. 副作用:
+//                                            resize 偶发白闪 + snap 方角. 详见
+//                                            接口文档警告. 默认窗别用.
+//          这两个接口完全属于 DWM, 与本实例生命周期无关, *不* 在 Detach
+//          时自动撤销. 调用方需显式传 FALSE 还原. 多个 CXBlur 实例在同一
+//          HWND 上时, 什么时候开 / 关 native shadow / corner 由调用方控制.
+//
+//          *Win11 by design 限制*: 最大化 / snap 状态下 DWM 不画圆角 / shadow,
+//          这是系统级行为, 任何 app 包括 Edge / Settings / Notepad 一致, 接口
+//          层无法 override. 详见
+//          https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-rounded-corners
 //@模块信息结束
 
 // =================================================================
@@ -75,6 +96,35 @@
 #pragma comment(lib, "Dxguid.lib")
 #pragma comment(lib, "Dwmapi.lib")
 
+//@别名 取系统版本()
+static inline int GetCurrentVersion() {
+    HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+    if (hMod) {
+        typedef LONG(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hMod, "RtlGetVersion");
+        if (RtlGetVersion) {
+            RTL_OSVERSIONINFOW osvi = { 0 };
+            osvi.dwOSVersionInfoSize = sizeof(osvi);
+            
+            if (RtlGetVersion(&osvi) == 0) { // STATUS_SUCCESS
+                DWORD major = osvi.dwMajorVersion;
+                DWORD minor = osvi.dwMinorVersion;
+                DWORD build = osvi.dwBuildNumber;
+                
+                // Windows 11: 10.0.22000+
+                if (major == 10 && build >= 22000) return 11;
+                // Windows 10: 10.0 (build < 22000)
+                if (major == 10) return 10;
+                // Windows 8.1: 6.3
+                // Windows 8: 6.2
+                if (major == 6 && minor >= 2) return 8;
+                // Windows 7: 6.1
+                if (major == 6 && minor == 1) return 7;
+            }
+        }
+	}
+}
+
 //@隐藏{
 class CXBlur;
 //@隐藏}
@@ -91,6 +141,23 @@ enum xblur_theme_
 	xblur_theme_dark      = 2,
 	//@别名 模糊主题_跟随系统
 	xblur_theme_auto      = 3,
+};
+
+///DWM 原生圆角预设 (CXBlur::EnableNativeRoundedCorner 参数).
+///这些是 Windows 11 21H2+ DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE)
+///的 4 个取值. 老系统 (Win10 / Win7) 调用静默失败, 本枚举值与 DWM
+///原生 DWM_WINDOW_CORNER_PREFERENCE 枚举二进制一致 (0/1/2/3).
+//@别名 原生圆角预设
+enum xblur_corner_
+{
+	//@别名 原生圆角_默认
+	xblur_corner_default     = 0,   // DWMWCP_DEFAULT     由 DWM 决定 (顶层窗 ≈ round)
+	//@别名 原生圆角_不圆角
+	xblur_corner_donotround  = 1,   // DWMWCP_DONOTROUND  强制直角
+	//@别名 原生圆角_圆角
+	xblur_corner_round       = 2,   // DWMWCP_ROUND       8 px (Win11 窗体默认)
+	//@别名 原生圆角_小圆角
+	xblur_corner_roundsmall  = 3,   // DWMWCP_ROUNDSMALL  4 px (菜单 / popup)
 };
 
 ///主题预设默认参数 (CXBlur::SetThemeDefault / GetThemeDefault)
@@ -222,6 +289,119 @@ public:
 //@备注 当前 CXBlur 实例的系统 acrylic / blur 是否成功启用.
 //@别名  是否已启用系统亚克力()
 	BOOL IsSystemAcrylicEnabled() const;
+
+//@备注 启用 / 关闭 DWM 原生窗外阴影 (DwmExtendFrameIntoClientArea).
+//
+//      *绝大多数 XCGUI 用户不需要本接口* ——————————————————
+//      XCGUI 默认窗 (CXWindow / window_style_default) 自带 WS_THICKFRAME,
+//      DWM 已自动给它画 drop shadow + 1 px 描边. 这种窗只要调用
+//      EnableNativeRoundedCorner 设圆角就够了, 阴影自来.
+//
+//      本接口存在的唯一场景: *纯 WS_POPUP* (无 WS_THICKFRAME / WS_CAPTION)
+//      的 borderless 窗 — DWM 不会自动给它画 shadow, 必须靠 frame extension
+//      显式触发.
+//
+//      *代价 (DwmExtendFrameIntoClientArea 的固有副作用)*:
+//        1. frame extension 区域 (1 px 边带) 在 resize 瞬间会闪出窗类
+//           hbrBackground 默认色 (XCGUI 通常是白色). 深色主题上肉眼可见.
+//           cloak 机制只能盖首帧, resize 期偶发白闪改不掉.
+//        2. snap state 下 DWM frame 强制方角, EnableNativeRoundedCorner
+//           的 corner pref 此时无效 — 表现为 "snap 中方角 + 阴影". 这是
+//           Win11 DWM by design (frame extension 与 corner pref 在 snap
+//           state 互斥).
+//
+//      *自动行为* (host 状态机):
+//        * 真最大化 (IsZoomed): margins=0 屏蔽 shadow, 还原后恢复.
+//        * 启动白闪缓解: 调用时若窗未 visible, 自动 DWMWA_CLOAK 150 ms.
+//
+//      本接口与 CXBlur 实例生命周期无关 —— 静态 HWND 级, *不* 在 Detach
+//      时撤销, 调用方须显式传 FALSE 还原.
+//
+//      返回 TRUE = DWM 接受, FALSE = 句柄非法 / DWM 未启用 / 老 OS 不支持.
+//@参数 hWnd     XCGUI 窗口句柄.
+//@参数 bEnable  TRUE 启用, FALSE 还原.
+//@别名  启用原生阴影()
+	static BOOL EnableNativeShadow(HWINDOW hWnd, BOOL bEnable);
+
+//@备注 启用 Win11 DWM 原生窗体圆角 (DwmSetWindowAttribute /
+//      DWMWA_WINDOW_CORNER_PREFERENCE = 33). 仅 Win11 21H2+ (build >= 22000)
+//      生效, 老系统调用返 E_INVALIDARG, 本函数透传 FALSE.
+//
+//      圆角由 DWM 在合成级别处理, 不动 SetWindowRgn / 位图, 与
+//      ACCENT_ACRYLIC 兼容. 与 EnableNativeShadow 解耦 (二者状态机共享但
+//      可独立 set).
+//
+//      *推荐用法 (默认 XCGUI 窗)*:
+//        XCGUI 默认窗带 WS_THICKFRAME, DWM 会 *自动* 给它画 drop shadow,
+//        所以一般 *只调本接口* 即可: 圆角 + 自动阴影 + 描边都有, 无白闪.
+//        *不要* 再调 EnableNativeShadow (那是给纯 popup 窗用的, 调了会
+//        引入白闪 + snap 方角, 详见其文档).
+//
+//      *自动行为* (host 状态机):
+//        * 真最大化 (IsZoomed): 强制 DWMWCP_DONOTROUND, 还原后恢复 user pref.
+//        * WM_SIZE / WM_WINDOWPOSCHANGED / WM_DPICHANGED: 重 set corner
+//          pref, 保险 DWM 在状态切换时仍按 user pref 渲染.
+//
+//      *已知限制 (Win11 by design, 引 MS 官方文档)*:
+//        原文: "By design, apps are not rounded when maximized, snapped,
+//              running in a Virtual Machine (VM), running on a Windows
+//              Virtual Desktop (WVD), or running as a Windows Defender
+//              Application Guard (WDAG) window."
+//        参考: https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-rounded-corners
+//
+//        即:
+//          * 最大化 → 方角 + 无 shadow (Edge / Settings / Notepad 一致).
+//          * snap (Aero Snap / Snap Layouts) → 方角 + 无 shadow + 无描边.
+//            这是 Win11 让 snap 窗紧贴屏幕边 / 邻窗的设计选择.
+//          * VM / 远程桌面 → DWM 不参与渲染, 圆角自然无.
+//        本接口对上述状态的 set 调用 *会* 成功 (返 S_OK), 但 DWM 不渲染.
+//        无任何接口 / DWM 私有 attribute 能 override 这个 by-design 行为.
+//        若必须在 snap 也保留圆角/阴影, 唯一办法是放弃 DWM 路径全程自绘
+//        (per-pixel alpha layering + SetWindowRgn), 代价见 MS 文档.
+//
+//      本接口同样是静态 HWND 级, *不* 在 Detach 时还原.
+//
+//      返回 TRUE = Win11+ 且 DWM 接受, FALSE = Win10- / DWM 未启用 / 句柄非法.
+//@参数 hWnd          XCGUI 窗口句柄.
+//@参数 cornerStyle   xblur_corner_* 枚举值.
+//@别名  启用原生圆角()
+	static BOOL EnableNativeRoundedCorner(HWINDOW hWnd, int cornerStyle);
+
+//@备注 启用 / 禁用本窗的系统 snap 行为. 默认 TRUE (启用, 与系统一致).
+//
+//      *动机*: Win11 snap 状态下 DWM by design 不画圆角 / 阴影 / 描边
+//      (见 EnableNativeRoundedCorner 文档已知限制). 若你的 UI 不希望
+//      切到 snap 状态破坏视觉, 可调本接口禁掉 snap.
+//
+//      *bEnable=FALSE 的实现策略 (Win 没有 per-window snap 关闭官方 API,
+//      用三件套组合)*:
+//        1. strip WS_MAXIMIZEBOX → 杀 Win11 Snap Layouts 飞出框 (悬停最大
+//           化按钮的小窗格选择). *副作用: 最大化按钮变灰不可点.*
+//        2. WM_WINDOWPOSCHANGING 几何过滤 → 检测目标矩形是否匹配 snap
+//           layout (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE
+//           阻止落位 (拦 Aero Snap 拖标题到屏幕边).
+//        3. WM_SYSCOMMAND 吞 SC_MAXIMIZE → 拦键盘 Win+Up 最大化, 标题栏
+//           双击最大化, 系统菜单 "最大化".
+//
+//      *副作用 / 限制*:
+//        * 最大化按钮变灰. 本接口与 "用户期望最大化窗" 互斥, 二选一.
+//        * snap 几何检测有 2 px 容差, 用户手动恰好 resize 到 1/2 屏 / 1/4
+//          屏尺寸会被误拦. 概率极低 (要求 4 边都对齐 work area).
+//        * 触摸板三指手势 / 屏幕投递的 snap 不走以上路径, 拦不住.
+//          (Win 系统 hook, 接口层无法干预.)
+//
+//      *bEnable=TRUE (从 FALSE 切回)*: 还原 WS_MAXIMIZEBOX 到 strip 前状态
+//      (若原本就没 MAXIMIZEBOX, 不改). 拦截过滤逻辑空转.
+//
+//      本接口同样是静态 HWND 级, 与 EnableNativeShadow / EnableNativeRoundedCorner
+//      共用同一 hook + 状态机, *不* 在 Detach 时还原. 调用方须显式 EnableSnap(TRUE)
+//      还原.
+//
+//      返回 TRUE = 设置成功, FALSE = 句柄非法.
+//@参数 hWnd     XCGUI 窗口句柄.
+//@参数 bEnable  TRUE 启用 (默认), FALSE 禁用所有 snap 入口.
+//@别名  启用Snap()
+	static BOOL EnableSnap(HWINDOW hWnd, BOOL bEnable);
 
 //@备注 强制开启 / 关闭 *系统* 透明效果 (写 HKCU 注册表 EnableTransparency).
 //      让 ACCENT_ACRYLIC 在用户关了"个性化-颜色-透明效果"时仍能出真 blur.
