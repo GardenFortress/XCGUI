@@ -612,9 +612,11 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
     // *EnableMaximize(TRUE) 默认值 = 允许最大化. 与 XWnd_EnableMaxWindow 一致.*
     if (msg == WM_WINDOWPOSCHANGING && dwRefData){
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
-        // 跳过 maximizing 暂态: SC_MAXIMIZE 紧随的 WINDOWPOSCHANGING 几何
-        // = 全工作区, 与 "snap 全屏" 几何相同, 必须放行 (用户的本意是最大化).
-        if (p->IsSnapEnabled() && !p->IsMaximizingTransient()){
+        // 区分 "用户最大化" vs "Aero Snap 落位": IsZoomed=true 时是真最大化
+        // (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) / SetWindowPlacement /
+        // WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max), 几何虽然 = 全工作区, 必须
+        // 放行. 仅在窗口处于非最大化状态时才执行 snap 几何过滤.
+        if (p->IsSnapEnabled() && !::IsZoomed(hwnd)){
             WINDOWPOS* wpos = reinterpret_cast<WINDOWPOS*>(lp);
             if (wpos && _CXShadow_IsSnapTargetGeom(wpos, hwnd)){
                 wpos->flags |= SWP_NOMOVE | SWP_NOSIZE;
@@ -622,23 +624,12 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
         }
         // fall through to DefSubclassProc — 用修改后的 wpos 让消息链继续
     }
-    if (msg == WM_WINDOWPOSCHANGED && dwRefData){
-        // 清 maximizing 暂态. SC_MAXIMIZE 引发的 WINDOWPOSCHANGING 已经放行.
-        // 实例方法访问无锁 (UI 线程独占), 安全.
-        CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
-        p->ClearMaximizingTransient();
-        // fall through to DefSubclassProc
-    }
     if (msg == WM_SYSCOMMAND && dwRefData){
+        // EnableMaximize(FALSE) → 吞 SC_MAXIMIZE (Win+Up / 双击标题栏 / 系统菜单).
+        // 默认 (m_maxDisabled=false) 此分支零开销.
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
-        if ((wp & 0xFFF0) == SC_MAXIMIZE){
-            // EnableMaximize(FALSE) → 吞 (m_maxDisabled=true).
-            if (!p->IsMaximizeEnabled()){
-                return 0;   // 直接 swallow, 不调 DefSubclassProc
-            }
-            // 允许最大化: 置位 maximizing 让接下来的 WINDOWPOSCHANGING 跳过过滤.
-            p->SetMaximizingTransient();
-            // fall through to DefSubclassProc — 让 SC_MAXIMIZE 真正生效
+        if ((wp & 0xFFF0) == SC_MAXIMIZE && !p->IsMaximizeEnabled()){
+            return 0;   // swallow, 不调 DefSubclassProc
         }
     }
 
@@ -1548,13 +1539,6 @@ void CXShadow::EnableMaximize(BOOL bEnable){
 BOOL CXShadow::IsMaximizeEnabled() const {
     return m_maxDisabled.load() ? FALSE : TRUE;
 }
-
-// ----- maximizing transient flag (子类 proc 调用) -----
-// SC_MAXIMIZE 放行 → 置位 → 紧随的 WINDOWPOSCHANGING 跳过 snap 几何过滤 →
-// WINDOWPOSCHANGED 清回. 全在 UI 线程, 无锁.
-void CXShadow::SetMaximizingTransient()   { m_maximizing = true; }
-void CXShadow::ClearMaximizingTransient() { m_maximizing = false; }
-BOOL CXShadow::IsMaximizingTransient() const { return m_maximizing ? TRUE : FALSE; }
 
 //============================================================================
 // padding 计算与应用

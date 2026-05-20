@@ -383,9 +383,12 @@ public:
 //        WM_WINDOWPOSCHANGING 几何过滤 → 检测目标矩形是否匹配 snap layout
 //        (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE 阻止落位.
 //
-//        SC_MAXIMIZE 触发的 WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap
-//        全屏" 在几何上无法区分, 用 maximizing 暂态 flag 跳过过滤 — 见
-//        cpp 顶部 "Snap / 最大化 禁用机制" 注释.
+//        真最大化 (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) /
+//        SetWindowPlacement / WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max) 的
+//        WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap 全屏" 几何相同, 用
+//        IsZoomed(hwnd) 区分 — 派发 WINDOWPOSCHANGING 之前 WINDOWPLACEMENT
+//        已更新, IsZoomed=true 时跳过过滤. 见 cpp 顶部 "Snap / 最大化 禁用
+//        机制" 注释.
 //
 //      *副作用 / 限制*:
 //        * snap 几何检测有 2 px 容差, 用户手动恰好 resize 到 1/2 屏 / 1/4

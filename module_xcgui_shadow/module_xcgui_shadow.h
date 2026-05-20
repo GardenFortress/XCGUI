@@ -332,8 +332,11 @@ public:
 //        snap layout (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE
 //        阻止落位.
 //
-//        SC_MAXIMIZE 转化的 WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap 全屏"
-//        几何相同, 用 maximizing 暂态 flag 跳过过滤 — 见 cpp 子类 proc.
+//        真最大化 (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) /
+//        SetWindowPlacement / WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max) 的
+//        WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap 全屏" 几何相同, 用
+//        IsZoomed(hwnd) 区分 — 派发 WINDOWPOSCHANGING 之前 WINDOWPLACEMENT
+//        已更新, IsZoomed=true 时跳过过滤. 见 cpp 子类 proc.
 //
 //      *bEnable=TRUE 的额外性能收益*: 既然 snap 不可能发生, SyncWindowState
 //      会跳过 IsWindowSnapped() 计算 (m_isSnapped 强制为 false), 省去每次
@@ -393,15 +396,6 @@ public:
 //@别名  是否允许最大化()
     BOOL IsMaximizeEnabled() const;
 
-//@隐藏{
-    // ----- maximizing 暂态 flag (子类 proc 调用; 公开仅为子类 proc 访问) -----
-    // SC_MAXIMIZE 放行时置位, 紧随 WINDOWPOSCHANGED 清回. 在此期间
-    // WINDOWPOSCHANGING 跳过 snap 几何过滤 (因几何 = 全工作区, 用户本意是最大化).
-    void SetMaximizingTransient();
-    void ClearMaximizingTransient();
-    BOOL IsMaximizingTransient() const;
-//@隐藏}
-
     //@隐藏{
 private:
     // ===== 绑定状态 =====
@@ -441,10 +435,11 @@ private:
     //   false (默认) → 允许最大化 (与 XWnd_EnableMaxWindow 一致).
     //   true             → 禁最大化: strip WS_MAXIMIZEBOX + 子类 proc 吞 SC_MAXIMIZE.
     //
-    // m_maximizing (暂态, 非 atomic):
-    //   子类 proc 在 SC_MAXIMIZE 放行时置 true, 紧随的 WINDOWPOSCHANGED 清回 false.
-    //   作用: 让接下来的 WINDOWPOSCHANGING (几何 = 全工作区) 跳过 snap 过滤,
-    //   区分 "用户最大化" 和 "snap 全屏" (二者几何相同). 全在 UI 线程读写, 无锁.
+    // *区分 "用户最大化" vs "snap 全屏" (二者 WINDOWPOSCHANGING 几何相同 = 全
+    // 工作区)*: 子类 proc 直接调 IsZoomed(hwnd). Win32 在派发 WINDOWPOSCHANGING
+    // 之前已更新 WINDOWPLACEMENT.showCmd, IsZoomed=true 覆盖所有真最大化路径
+    // (键盘 Win+Up / 鼠标按钮 / API ShowWindow / SetWindowPlacement /
+    // WS_MAXIMIZE 启动 / 拖到顶 snap-to-max). 不需要额外的暂态 flag.
     //
     // atomic 因为 EnableSnap / EnableMaximize 可能被 UI 线程外的线程调 (与
     // SetTheme 一致策略), 子类 proc 在 Win32 消息派发 (UI) 线程读, 共享访问
@@ -453,7 +448,6 @@ private:
     std::atomic<bool> m_maxDisabled         {false};
     bool              m_maxBoxSaved         = false;   // 是否已 strip WS_MAXIMIZEBOX
     bool              m_maxBoxOriginallySet = false;   // strip 前 WS_MAXIMIZEBOX 是否本来置位
-    bool              m_maximizing          = false;   // 暂态: SC_MAXIMIZE → WINDOWPOSCHANGED 之间
 
     // ===== 主窗原状态备份 (Detach 还原用) =====
     bool    m_saved             = false;      // 是否已抓取过原状态
