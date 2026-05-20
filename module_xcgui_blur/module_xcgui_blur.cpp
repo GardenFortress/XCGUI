@@ -1336,11 +1336,27 @@ struct NativeFxState {
 
 	// ===== Snap 控制 (EnableSnap) =====
 	// snapEnabled = true (默认) → 系统 snap 行为正常.
-	// snapEnabled = false → strip WS_MAXIMIZEBOX + WM_WINDOWPOSCHANGING 过滤 +
-	//                       WM_SYSCOMMAND 吞 SC_MAXIMIZE / Win+方向键 snap.
+	// snapEnabled = false → 仅拦 *snap* 入口 (Aero Snap 拖边 / Win+方向键 / Snap
+	//                       Layouts 选 half/quarter), 通过 WM_WINDOWPOSCHANGING
+	//                       几何过滤实现. 最大化按钮 / SC_MAXIMIZE 不受影响 —
+	//                       如果你也想禁最大化, 用独立 EnableMaximize 接口.
 	bool    snapEnabled         = true;
+
+	// ===== 最大化控制 (EnableMaximize) =====
+	// maxEnabled = true (默认, 跟随窗口 WS_MAXIMIZEBOX 原始状态).
+	// maxEnabled = false → strip WS_MAXIMIZEBOX (按钮变灰) + 吞 SC_MAXIMIZE.
+	bool    maxEnabled          = true;
 	bool    maxBoxSaved         = false;    // 是否已 strip WS_MAXIMIZEBOX
 	bool    maxBoxOriginallySet = false;    // strip 前 WS_MAXIMIZEBOX 是否本来就置位
+
+	// ===== Snap / 最大化 解耦的暂态 flag =====
+	// SC_MAXIMIZE 经 WM_SYSCOMMAND 放行后会触发 WM_WINDOWPOSCHANGING, 目标矩形
+	// = 全工作区, 几何上跟 "snap 全屏 (拖到顶边)" 完全一样. 没法靠几何区分
+	// "用户主动最大化" 和 "Aero Snap 全屏". 用一个暂态标记: SYSCOMMAND
+	// 处理 SC_MAXIMIZE 时把它拨为 true, 紧随其后的 WM_WINDOWPOSCHANGING 就跳
+	// 过 snap 几何过滤; WM_WINDOWPOSCHANGED 处理完后立即清回 false.
+	// 不需要 atomic — 全部在 UI 线程 (Win32 派发线程) 顺序读写, 锁内访问.
+	bool    maximizing          = false;
 };
 
 static std::mutex                     g_nativeFxMutex;
@@ -1364,19 +1380,33 @@ static bool XBlur_IsHostMaximized(HWND raw){
 	return raw && ::IsWindow(raw) && (::IsZoomed(raw) != FALSE);
 }
 
-// ---------------- Snap 禁用机制 ----------------------------------------------
+// ---------------- Snap / 最大化 禁用机制 (相互独立) ---------------------------
 //
-// Win 没有 per-window "禁 snap" 的官方 API. 用三件套组合实现:
+// Win 没有 per-window "禁 snap" / "禁最大化" 的官方 API. 拆成两套独立实现:
 //
-//   1. strip WS_MAXIMIZEBOX  → 杀 Win11 Snap Layouts 飞出框 (悬停最大化按钮).
-//      副作用: 最大化按钮变灰, 系统不响应 SC_MAXIMIZE.
-//   2. WM_WINDOWPOSCHANGING 几何检测 → 拦 Aero Snap 拖边 (用户拖标题到屏幕边).
-//      检测: target rect 几何匹配 snap layout (full / half / quarter) → 设
-//      SWP_NOMOVE | SWP_NOSIZE 阻止落位.
-//   3. WM_SYSCOMMAND 吞 SC_MAXIMIZE / Win+方向键 (键盘 snap 走 SC_MOVE 子命令
-//      0xF030/F032/F034/F036, 这里统一吞掉).
+//   * EnableSnap(FALSE) — 仅拦 snap 拖边落位. 不动 WS_MAXIMIZEBOX, 不动
+//     SC_MAXIMIZE. 标题栏最大化按钮 / 双击 / Win+Up 仍能正常最大化.
 //
-// 三者必须同时上, 缺一会留 snap 入口.
+//       WM_WINDOWPOSCHANGING 几何过滤 → target rect 匹配 snap layout (左右
+//       半屏 / 上下半屏 / 四角 / 全屏) → 设 SWP_NOMOVE | SWP_NOSIZE 阻止落位.
+//
+//       但 SC_MAXIMIZE 转化的 WM_WINDOWPOSCHANGING 目标 rect = 全工作区, 几
+//       何上和 "snap 全屏" 完全一样, 必须区分. 用 maximizing 暂态 flag (见
+//       NativeFxState), SC_MAXIMIZE 放行时立刻置位, 下一帧 WM_WINDOWPOSCHANGED
+//       清掉 — 这之间的 WM_WINDOWPOSCHANGING 跳过过滤.
+//
+//   * EnableMaximize(FALSE) — 同时禁掉最大化:
+//       - strip WS_MAXIMIZEBOX → 杀 Snap Layouts 悬停飞出框 + 标题栏最大化
+//                                  按钮变灰.
+//       - WM_SYSCOMMAND 吞 SC_MAXIMIZE → 拦键盘 Win+Up + 双击标题栏 + 系统
+//                                          菜单 "最大化".
+//
+// 两套接口可任意组合:
+//   EnableSnap(FALSE) + EnableMaximize(TRUE)  ← 典型场景: 不喜欢 snap 但保留
+//                                                最大化按钮.
+//   EnableSnap(FALSE) + EnableMaximize(FALSE) ← 完全锁死窗口尺寸入口.
+//   EnableSnap(TRUE)  + EnableMaximize(FALSE) ← 允许 snap 但禁最大化, 罕见.
+//   EnableSnap(TRUE)  + EnableMaximize(TRUE)  ← 默认, 系统行为.
 
 // 检测 wp 的目标矩形是否是 snap target geometry.
 // 用容差 2 px 防 DPI rounding 误差. 仅匹配 snap layout 标准位置 (左/右半屏 /
@@ -1413,15 +1443,6 @@ static bool XBlur_IsSnapTargetGeom(const WINDOWPOS* wp, HWND raw){
 	if (fullW && halfH && atL && atR && (atT || atB)) return true;  // 上/下半屏
 	if (halfW && halfH && (atL || atR) && (atT || atB)) return true;// 四角
 	return false;
-}
-
-// 吞掉的 WM_SYSCOMMAND wParam (按 0xFFF0 mask 后比较):
-//   SC_MAXIMIZE  = 0xF030
-//   Win+方向键   = 0xF030 / 0xF120 (snap 模拟) — 实测 Win11 上 SC_MAXIMIZE 与
-//   一些 SC_MOVE 子命令也会被 snap 复用. 简化为 mask 后判定.
-static bool XBlur_IsSnapSysCommand(WPARAM wParam){
-	WPARAM cmd = wParam & 0xFFF0;
-	return cmd == SC_MAXIMIZE;
 }
 
 // strip / restore WS_MAXIMIZEBOX. 持锁 + 锁外 两段:
@@ -1542,13 +1563,18 @@ static int CALLBACK _CXBlur_NativeFxWndProc(HWINDOW hWnd, UINT msg,
 		// EnableSnap(FALSE) 时, 检测 wp 目标矩形是否是 snap target geometry —
 		// 若是则覆盖 SWP_NOMOVE | SWP_NOSIZE 阻止落位 (Aero Snap 拖边的拦截点).
 		// snapEnabled=true (默认) 时此分支零开销.
+		//
+		// *maximizing flag 跳过*: 紧随 SC_MAXIMIZE 的 WINDOWPOSCHANGING 几何
+		// = 全工作区, 用户的本意是最大化不是 snap, 必须放行. 用 maximizing
+		// 暂态 (SYSCOMMAND 处置位, WINDOWPOSCHANGED 清回) 区分.
 		WINDOWPOS* wp = (WINDOWPOS*)lParam;
 		if (!wp) break;
 		bool snapBlocked = false;
 		{
 			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
 			auto it = g_nativeFxMap.find(raw);
-			if (it != g_nativeFxMap.end() && !it->second.snapEnabled){
+			if (it != g_nativeFxMap.end() && !it->second.snapEnabled
+			    && !it->second.maximizing){
 				snapBlocked = true;
 			}
 		}
@@ -1562,7 +1588,13 @@ static int CALLBACK _CXBlur_NativeFxWndProc(HWINDOW hWnd, UINT msg,
 		// snap 完成 / restore-from-snap 部分场景只发 WM_WINDOWPOSCHANGED 不发
 		// WM_SIZE (CXShadow 早有此观察). 这里只在 size 真变了才 react —— 避免
 		// 拖动期 spam (WM_WINDOWPOSCHANGED 每像素都触发, 不能盲应用).
+		// *清 maximizing 暂态* — SC_MAXIMIZE 触发的 WINDOWPOSCHANGING 已处理完.
 		WINDOWPOS* wp = (WINDOWPOS*)lParam;
+		{
+			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+			auto it = g_nativeFxMap.find(raw);
+			if (it != g_nativeFxMap.end()) it->second.maximizing = false;
+		}
 		if (wp && (wp->flags & SWP_NOSIZE) == 0){
 			XBlur_SyncHost(raw);
 		}
@@ -1570,21 +1602,30 @@ static int CALLBACK _CXBlur_NativeFxWndProc(HWINDOW hWnd, UINT msg,
 	}
 
 	case WM_SYSCOMMAND: {
-		// EnableSnap(FALSE) 时, 吞 SC_MAXIMIZE — 拦键盘 Win+Up 最大化 (Win11
-		// snap 入口之一) + 标题栏双击最大化 + 系统菜单 "最大化". *pbHandled=TRUE
-		// 让 XCGUI 不再下发 DefWindowProc → SC_MAXIMIZE 不会触发系统最大化.
-		// snapEnabled=true (默认) 时此分支零开销.
-		bool snapBlocked = false;
-		{
-			std::lock_guard<std::mutex> lk(g_nativeFxMutex);
-			auto it = g_nativeFxMap.find(raw);
-			if (it != g_nativeFxMap.end() && !it->second.snapEnabled){
-				snapBlocked = true;
+		// SC_MAXIMIZE 处理 (mask 0xFFF0 拿主命令, 低 4 位是 system reserved).
+		// 两条路径:
+		//   * EnableMaximize(FALSE)  → 吞掉 (pbHandled=TRUE), 不下发 DefWindowProc.
+		//   * EnableMaximize(TRUE)   → 放行, 但置 maximizing=true 让紧接的
+		//                                WINDOWPOSCHANGING 跳过 snap 几何过滤
+		//                                (即使 EnableSnap(FALSE)).
+		// 默认 (maxEnabled=true, snapEnabled=true) 此分支只置个 flag, 几乎零开销.
+		if ((wParam & 0xFFF0) == SC_MAXIMIZE){
+			bool maxBlocked = false;
+			{
+				std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+				auto it = g_nativeFxMap.find(raw);
+				if (it != g_nativeFxMap.end()){
+					if (!it->second.maxEnabled){
+						maxBlocked = true;
+					} else {
+						it->second.maximizing = true;
+					}
+				}
 			}
-		}
-		if (snapBlocked && XBlur_IsSnapSysCommand(wParam)){
-			if (pbHandled) *pbHandled = TRUE;
-			return 0;
+			if (maxBlocked){
+				if (pbHandled) *pbHandled = TRUE;
+				return 0;
+			}
 		}
 		break;
 	}
@@ -1709,11 +1750,52 @@ BOOL CXBlur::EnableNativeRoundedCorner(HWINDOW hWnd, int cornerStyle){
 //============================================================================
 // EnableSnap(HWINDOW, BOOL)
 //
-// 启用 / 禁用本窗的系统 snap 行为 (默认启用). 实现策略详见 anonymous namespace
-// "Snap 禁用机制" 注释 — 三件套: strip WS_MAXIMIZEBOX + WM_WINDOWPOSCHANGING
-// 几何过滤 + WM_SYSCOMMAND 吞 SC_MAXIMIZE.
+// 启用 / 禁用本窗的 Aero Snap 拖边落位 (默认启用). 实现策略详见 anonymous
+// namespace "Snap / 最大化 禁用机制" 注释.
+//
+// *与 EnableMaximize 解耦*: 本接口仅拦 snap 几何, 不动 WS_MAXIMIZEBOX, 不吞
+// SC_MAXIMIZE — 最大化按钮 / 双击 / Win+Up 仍能正常最大化. 想同时禁最大化
+// 请额外调 EnableMaximize(hWnd, FALSE).
 //============================================================================
 BOOL CXBlur::EnableSnap(HWINDOW hWnd, BOOL bEnable){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+	HWND raw = (HWND)::XWnd_GetHWND(hWnd);
+	if (!raw) return FALSE;
+
+	bool needHookInstall = false;
+	{
+		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
+		auto& st = g_nativeFxMap[raw];
+		st.snapEnabled = (bEnable != FALSE);
+		if (!st.hookInstalled){
+			st.hookInstalled = true;
+			st.hWindow       = hWnd;
+			needHookInstall  = true;
+		}
+	}
+	if (needHookInstall){
+		::XWnd_RegEventC1(hWnd, XWM_WINDPROC, (void*)_CXBlur_NativeFxWndProc);
+	}
+	return TRUE;
+}
+
+//============================================================================
+// EnableMaximize(HWINDOW, BOOL)
+//
+// 启用 / 禁用本窗的最大化能力 (默认启用, 跟随窗口 WS_MAXIMIZEBOX 原始状态).
+//
+// *bEnable=FALSE 双管齐下*:
+//   1. strip WS_MAXIMIZEBOX → 标题栏最大化按钮变灰 + Snap Layouts 悬停
+//                              飞出框消失.
+//   2. WM_SYSCOMMAND 吞 SC_MAXIMIZE → 拦键盘 Win+Up + 双击标题栏 + 系统菜单
+//                                       "最大化" + 程序化 ShowWindow(SW_MAXIMIZE).
+//
+// *bEnable=TRUE (从 FALSE 切回)*: 还原 WS_MAXIMIZEBOX 到 strip 前状态.
+//
+// *与 EnableSnap 完全独立*: 二者状态机共享同一 NativeFxState + hook, 但
+// 互不影响. 默认场景 (snap+max 都允许) 是系统行为.
+//============================================================================
+BOOL CXBlur::EnableMaximize(HWINDOW hWnd, BOOL bEnable){
 	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
 	HWND raw = (HWND)::XWnd_GetHWND(hWnd);
 	if (!raw) return FALSE;
@@ -1723,15 +1805,15 @@ BOOL CXBlur::EnableSnap(HWINDOW hWnd, BOOL bEnable){
 	{
 		std::lock_guard<std::mutex> lk(g_nativeFxMutex);
 		auto& st = g_nativeFxMap[raw];
-		bool prev = st.snapEnabled;
-		st.snapEnabled = (bEnable != FALSE);
+		bool prev = st.maxEnabled;
+		st.maxEnabled = (bEnable != FALSE);
 		if (!st.hookInstalled){
 			st.hookInstalled = true;
 			st.hWindow       = hWnd;
 			needHookInstall  = true;
 		}
-		if (prev != st.snapEnabled){
-			if (!st.snapEnabled){
+		if (prev != st.maxEnabled){
+			if (!st.maxEnabled){
 				needFrameChanged = XBlur_StripMaxBox_Locked(raw, st);
 			} else {
 				needFrameChanged = XBlur_RestoreMaxBox_Locked(raw, st);

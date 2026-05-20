@@ -485,10 +485,11 @@ BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
         ApplyThemePreset(t);
     }
 
-    // 7) Snap 阻止: m_snapDisabled 默认 true (本类默认阻止 snap, 与 CXBlur 反转).
-    //    用户若在 attach 前调过 EnableSnap(FALSE) 关闭阻止, m_snapDisabled=false 跳过.
-    //    否则 (默认 / EnableSnap(TRUE)) 此处 strip WS_MAXIMIZEBOX.
-    if (m_snapDisabled.load()){
+    // 7) 最大化禁用: m_maxDisabled 默认 false (本类默认 *允许* 最大化, 与
+    //    XWnd_EnableMaxWindow 一致). 仅当用户显式 EnableMaximize(FALSE) 时才
+    //    strip WS_MAXIMIZEBOX. snap 阻止本身 *不再* strip — snap 默认阻止
+    //    (m_snapDisabled=true) 不影响最大化按钮.
+    if (m_maxDisabled.load()){
         StripMaxBox();
     }
 
@@ -602,13 +603,18 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
     HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
-    // ----- Snap 阻止拦截 (EnableSnap(TRUE), 默认开启) -----
+    // ----- Snap / 最大化 阻止拦截 (默认: snap 阻止, 最大化允许) -----
     // 在子类 proc 处理, 比 XCGUI wndproc 更靠前 — Aero Snap / SC_MAXIMIZE 在到达
     // XCGUI / DefWindowProc 之前就被拦截或修改.
-    // *与 CXBlur 反转*: 这里 IsSnapEnabled()=TRUE 表示 snap 被阻止 (本类语义).
+    //
+    // *EnableSnap(TRUE) 默认值 = 阻止 snap. 与 CXBlur::EnableSnap 反转 —
+    //  shadow 类下 snap 状态视觉打断比较严重, 默认就阻止.*
+    // *EnableMaximize(TRUE) 默认值 = 允许最大化. 与 XWnd_EnableMaxWindow 一致.*
     if (msg == WM_WINDOWPOSCHANGING && dwRefData){
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
-        if (p->IsSnapEnabled()){
+        // 跳过 maximizing 暂态: SC_MAXIMIZE 紧随的 WINDOWPOSCHANGING 几何
+        // = 全工作区, 与 "snap 全屏" 几何相同, 必须放行 (用户的本意是最大化).
+        if (p->IsSnapEnabled() && !p->IsMaximizingTransient()){
             WINDOWPOS* wpos = reinterpret_cast<WINDOWPOS*>(lp);
             if (wpos && _CXShadow_IsSnapTargetGeom(wpos, hwnd)){
                 wpos->flags |= SWP_NOMOVE | SWP_NOSIZE;
@@ -616,10 +622,23 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
         }
         // fall through to DefSubclassProc — 用修改后的 wpos 让消息链继续
     }
+    if (msg == WM_WINDOWPOSCHANGED && dwRefData){
+        // 清 maximizing 暂态. SC_MAXIMIZE 引发的 WINDOWPOSCHANGING 已经放行.
+        // 实例方法访问无锁 (UI 线程独占), 安全.
+        CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
+        p->ClearMaximizingTransient();
+        // fall through to DefSubclassProc
+    }
     if (msg == WM_SYSCOMMAND && dwRefData){
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
-        if (p->IsSnapEnabled() && (wp & 0xFFF0) == SC_MAXIMIZE){
-            return 0;   // 直接 swallow, 不调 DefSubclassProc
+        if ((wp & 0xFFF0) == SC_MAXIMIZE){
+            // EnableMaximize(FALSE) → 吞 (m_maxDisabled=true).
+            if (!p->IsMaximizeEnabled()){
+                return 0;   // 直接 swallow, 不调 DefSubclassProc
+            }
+            // 允许最大化: 置位 maximizing 让接下来的 WINDOWPOSCHANGING 跳过过滤.
+            p->SetMaximizingTransient();
+            // fall through to DefSubclassProc — 让 SC_MAXIMIZE 真正生效
         }
     }
 
@@ -1439,7 +1458,7 @@ void CXShadow::RestoreMainStyles(){
     ::XWnd_EnableLayout(m_hAttachedWnd, m_savedLayout);
     // 不需恢复 EnableDrawBk — 本类从未修改它.
 
-    // Snap 控制: 还原 WS_MAXIMIZEBOX (若 EnableSnap(FALSE) 期间 strip 过).
+    // 最大化控制: 还原 WS_MAXIMIZEBOX (若 EnableMaximize(FALSE) 期间 strip 过).
     // RestoreMaxBox 内部对 "未 strip" 是 no-op, 安全调用.
     RestoreMaxBox();
 
@@ -1447,12 +1466,19 @@ void CXShadow::RestoreMainStyles(){
 }
 
 //============================================================================
-// Snap 禁用支撑函数 (StripMaxBox / RestoreMaxBox / EnableSnap / IsSnapEnabled)
+// Snap / 最大化 禁用支撑函数
+//   StripMaxBox / RestoreMaxBox  — WS_MAXIMIZEBOX 控制 (供 EnableMaximize 用).
+//   EnableSnap     / IsSnapEnabled       — 语义反转 (TRUE = 阻止 snap, 默认).
+//   EnableMaximize / IsMaximizeEnabled   — 标准语义 (TRUE = 允许最大化, 默认).
 //
 // 与 CXBlur 不同: CXShadow 没有共享 mutex 保护的状态机, 所有访问都通过 this
 // 指针 (实例级), 主线程顺序执行. 因此 SetWindowPos(SWP_FRAMECHANGED) 即使
 // 同步派发 WM_WINDOWPOSCHANGING 回我们的子类 proc, 也不会有重入死锁问题 —
-// 子类 proc 只读 m_snapDisabled (atomic), 不重入 EnableSnap.
+// 子类 proc 只读 m_snapDisabled / m_maxDisabled (atomic), 不重入 EnableSnap /
+// EnableMaximize.
+//
+// *snap / 最大化 解耦*: 见类文档. EnableSnap 仅控制几何过滤 + SyncWindowState
+// 短路, 完全不动 WS_MAXIMIZEBOX. WS_MAXIMIZEBOX 由 EnableMaximize 独立控制.
 //============================================================================
 void CXShadow::StripMaxBox(){
     if (m_maxBoxSaved) return;
@@ -1486,16 +1512,13 @@ void CXShadow::EnableSnap(BOOL bEnable){
     // 语义 (与 CXBlur 反转, 详见头文件 EnableSnap 文档):
     //   bEnable = TRUE  → 阻止 snap (m_snapDisabled = true).
     //   bEnable = FALSE → 允许 snap (m_snapDisabled = false, 系统默认行为).
+    //
+    // *不再动 WS_MAXIMIZEBOX*: snap 阻止纯靠子类 proc 几何过滤. 最大化能力
+    // 由 EnableMaximize 独立控制.
     bool newVal = (bEnable != FALSE);
     bool prev   = m_snapDisabled.exchange(newVal);
     if (prev == newVal) return;             // 无变化, 跳过
-    if (m_hAttachedWnd == NULL) return;     // 还没 attach, 仅记忆 m_snapDisabled,
-                                            // AttachToWnd 时按值 strip
-    if (newVal){
-        StripMaxBox();
-    } else {
-        RestoreMaxBox();
-    }
+    if (m_hAttachedWnd == NULL) return;     // 还没 attach, 仅记忆 m_snapDisabled
     // 切换后立即重算 m_isSnapped — 从 "阻止" 切回 "允许" 时, 当前几何若恰好
     // 在 snap target 位置, 需要 m_isSnapped=true 触发 ClearPadding; 反之亦然.
     SyncWindowState();
@@ -1504,6 +1527,34 @@ void CXShadow::EnableSnap(BOOL bEnable){
 BOOL CXShadow::IsSnapEnabled() const {
     return m_snapDisabled.load() ? TRUE : FALSE;
 }
+
+void CXShadow::EnableMaximize(BOOL bEnable){
+    // 语义 (与 XWnd_EnableMaxWindow 一致):
+    //   bEnable = TRUE  → 允许最大化 (默认, m_maxDisabled = false).
+    //   bEnable = FALSE → 禁最大化 (m_maxDisabled = true): strip WS_MAXIMIZEBOX
+    //                       + 子类 proc 吞 SC_MAXIMIZE.
+    bool newDisabled = (bEnable == FALSE);
+    bool prev        = m_maxDisabled.exchange(newDisabled);
+    if (prev == newDisabled) return;        // 无变化, 跳过
+    if (m_hAttachedWnd == NULL) return;     // 还没 attach, 仅记忆 m_maxDisabled,
+                                            // AttachToWnd 时按值 strip
+    if (newDisabled){
+        StripMaxBox();
+    } else {
+        RestoreMaxBox();
+    }
+}
+
+BOOL CXShadow::IsMaximizeEnabled() const {
+    return m_maxDisabled.load() ? FALSE : TRUE;
+}
+
+// ----- maximizing transient flag (子类 proc 调用) -----
+// SC_MAXIMIZE 放行 → 置位 → 紧随的 WINDOWPOSCHANGING 跳过 snap 几何过滤 →
+// WINDOWPOSCHANGED 清回. 全在 UI 线程, 无锁.
+void CXShadow::SetMaximizingTransient()   { m_maximizing = true; }
+void CXShadow::ClearMaximizingTransient() { m_maximizing = false; }
+BOOL CXShadow::IsMaximizingTransient() const { return m_maximizing ? TRUE : FALSE; }
 
 //============================================================================
 // padding 计算与应用
@@ -1646,7 +1697,9 @@ void CXShadow::SyncWindowState(){
     // 几何时 IsWindowSnapped 误返 true).
     m_isSnapped   = !m_isMaximized && !m_snapDisabled.load() && IsWindowSnapped();
 
-    // 真最大化前提: 用户允许最大化 (WS_MAXIMIZEBOX). 否则忽略 SC_MAXIMIZE 模拟态.
+    // 真最大化前提: 窗口仍带 WS_MAXIMIZEBOX. EnableMaximize(FALSE) 期间 strip
+    // 掉了, 此时即使 IsZoomed 报 true (旧的 SC_MAXIMIZE 模拟态), 也强制视为
+    // 非最大化 — 让阴影 padding 不被错误清掉.
     if (m_isMaximized){
         LONG s = ::GetWindowLongW(m_hMainHwnd, GWL_STYLE);
         if (!(s & WS_MAXIMIZEBOX)) m_isMaximized = false;
