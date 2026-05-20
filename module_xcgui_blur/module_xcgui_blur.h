@@ -367,45 +367,48 @@ public:
 //@别名  启用原生圆角()
 	static BOOL EnableNativeRoundedCorner(HWINDOW hWnd, int cornerStyle);
 
-//@备注 启用 / 禁用本窗的 Aero Snap 拖边落位. 默认 TRUE (启用, 与系统一致).
+//@备注 启用 / 禁用本窗的 Aero Snap. 默认 TRUE (启用, 与系统一致).
 //
 //      *动机*: Win11 snap 状态下 DWM by design 不画圆角 / 阴影 / 描边
 //      (见 EnableNativeRoundedCorner 文档已知限制). 若你的 UI 不希望
 //      切到 snap 状态破坏视觉, 可调本接口禁掉 snap.
 //
-//      *与 EnableMaximize 解耦 (重要)*:
-//        本接口 *仅* 拦截 snap 入口 (拖边落位 / Win+方向键 / Snap Layouts
-//        选 half/quarter), *不* 影响最大化能力 — 标题栏最大化按钮 /
-//        双击 / Win+Up / 程序化 ShowWindow(SW_MAXIMIZE) 仍正常工作.
-//        想同时禁最大化, 用独立的 EnableMaximize(hWnd, FALSE).
+//      *bEnable=FALSE 是 "字面禁 snap"*:
+//        - strip WS_MAXIMIZEBOX → 消除拖窗到屏幕边时浮出的 snap preview
+//                                   (半透蒙层 / Snap Layouts 飞出框).
+//                                   *副作用*: 标题栏最大化按钮变灰 *不可点*.
+//        - WM_WINDOWPOSCHANGING 几何过滤 → 检测目标矩形是否匹配 snap layout
+//                                          (full / half / quarter), 是则设
+//                                          SWP_NOMOVE | SWP_NOSIZE 阻止落位.
+//                                          兜底, 即便 preview 漏出也拦.
+//        - *不* 吞 SC_MAXIMIZE — 用户仍可通过键盘 Win+↑ / 程序化 ShowWindow
+//                                  (SW_MAXIMIZE) / SetWindowPlacement /
+//                                  WS_MAXIMIZE 创建属性 来最大化.
 //
-//      *bEnable=FALSE 的实现策略 (Win 没有 per-window snap 关闭官方 API)*:
-//        WM_WINDOWPOSCHANGING 几何过滤 → 检测目标矩形是否匹配 snap layout
-//        (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE 阻止落位.
+//        几何过滤里用 IsZoomed(hwnd) 区分 "真最大化" 和 "snap 全屏":
+//        Win32 在派发 WINDOWPOSCHANGING 前已更新 WINDOWPLACEMENT.showCmd,
+//        真最大化时 IsZoomed=true → 跳过过滤. 这覆盖所有真最大化路径.
 //
-//        真最大化 (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) /
-//        SetWindowPlacement / WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max) 的
-//        WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap 全屏" 几何相同, 用
-//        IsZoomed(hwnd) 区分 — 派发 WINDOWPOSCHANGING 之前 WINDOWPLACEMENT
-//        已更新, IsZoomed=true 时跳过过滤. 见 cpp 顶部 "Snap / 最大化 禁用
-//        机制" 注释.
+//      *与 EnableMaximize 的关系*:
+//        - 本接口 (EnableSnap(FALSE)) 让按钮变灰但保留 Win+↑ / API 通路.
+//        - EnableMaximize(FALSE) 在此基础上额外吞 SC_MAXIMIZE → 拦键盘 Win+↑
+//          + 双击标题栏 + 系统菜单 "最大化". (API 路径 ShowWindow 仍能用.)
+//        - 二者共享 WS_MAXIMIZEBOX strip 状态: 只要任一为禁用就 strip, 二者
+//          都启用才还原.
 //
 //      *副作用 / 限制*:
 //        * snap 几何检测有 2 px 容差, 用户手动恰好 resize 到 1/2 屏 / 1/4
 //          屏尺寸会被误拦. 概率极低 (要求 4 边都对齐 work area).
-//        * Snap Layouts 悬停飞出框 *仍会显示* (因为 WS_MAXIMIZEBOX 没动),
-//          但选择 half/quarter 时被几何过滤拦掉, 选 "maximize" tile 走
-//          SC_MAXIMIZE 仍可用. 想隐藏飞出框, 配 EnableMaximize(FALSE).
 //        * 触摸板三指手势 / 屏幕投递的 snap 不走以上路径, 拦不住.
 //          (Win 系统 hook, 接口层无法干预.)
 //
-//      本接口同样是静态 HWND 级, 与 EnableNativeShadow / EnableNativeRoundedCorner
+//      本接口是静态 HWND 级, 与 EnableNativeShadow / EnableNativeRoundedCorner
 //      / EnableMaximize 共用同一 hook + 状态机, *不* 在 Detach 时还原.
 //      调用方须显式 EnableSnap(TRUE) 还原.
 //
 //      返回 TRUE = 设置成功, FALSE = 句柄非法.
 //@参数 hWnd     XCGUI 窗口句柄.
-//@参数 bEnable  TRUE 启用 (默认), FALSE 禁用 snap 拖边落位.
+//@参数 bEnable  TRUE 启用 (默认), FALSE 字面禁 snap (按钮灰, 保留 Win+↑/API).
 //@别名  启用Snap()
 	static BOOL EnableSnap(HWINDOW hWnd, BOOL bEnable);
 

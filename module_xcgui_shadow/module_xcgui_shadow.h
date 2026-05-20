@@ -310,33 +310,38 @@ public:
 //@别名  立即刷新()
     void Invalidate();
 
-    // ===== Snap / 最大化 控制 (相互独立) =====
+    // ===== Snap / 最大化 控制 =====
 //@备注 启用 / 禁用本窗的 *Aero Snap 阻止* 功能. **默认 TRUE — snap 被阻止**.
 //      *(注意: 与 CXBlur::EnableSnap 语义相反, 本类默认就阻止 snap. 因为 snap
 //       状态会让 CXShadow 必须 ClearPadding 收起阴影, 视觉打断, 多数用户不希
 //       望出现这种状态.)*
 //
 //      参数语义:
-//        * bEnable = TRUE  → **阻止 snap** (默认). 窗口无法进入 Aero Snap.
+//        * bEnable = TRUE  → **阻止 snap** (默认). 字面禁 snap.
 //        * bEnable = FALSE → 允许 snap (系统行为).
 //
-//      *与 EnableMaximize 解耦 (重要)*:
-//        本接口 *只* 控制 Aero Snap 拖边落位, 与最大化按钮 / SC_MAXIMIZE
-//        完全无关. 默认 (snap 阻止 + 最大化允许) 下: 标题栏最大化按钮 /
-//        双击 / Win+Up 仍能正常最大化, 但拖窗口到屏幕边不会 snap.
+//      *bEnable=TRUE 是 "字面禁 snap"*:
+//        - strip WS_MAXIMIZEBOX → 消除拖窗到屏幕边时浮出的 snap preview UI
+//                                   (半透蒙层 / Snap Layouts 飞出框).
+//                                   *副作用*: 标题栏最大化按钮变灰 *不可点*.
+//        - WM_WINDOWPOSCHANGING 几何过滤 → 子类 proc 检测目标矩形是否匹配
+//                                          snap layout (full / half / quarter),
+//                                          是则设 SWP_NOMOVE | SWP_NOSIZE 阻止
+//                                          落位. 兜底, 即便 preview 漏出也拦.
+//        - *不* 吞 SC_MAXIMIZE — 用户仍可通过键盘 Win+↑ / 程序化 ShowWindow
+//                                  (SW_MAXIMIZE) / SetWindowPlacement /
+//                                  WS_MAXIMIZE 创建属性 来最大化.
 //
-//        想同时禁最大化, 调 EnableMaximize(FALSE).
+//        几何过滤里用 IsZoomed(hwnd) 区分 "真最大化" 和 "snap 全屏": Win32
+//        在派发 WINDOWPOSCHANGING 前已更新 WINDOWPLACEMENT.showCmd, 真最大
+//        化时 IsZoomed=true → 跳过过滤. 这覆盖所有真最大化路径.
 //
-//      *bEnable=TRUE 的实现策略*:
-//        WM_WINDOWPOSCHANGING 几何过滤 → 子类 proc 检测目标矩形是否匹配
-//        snap layout (full / half / quarter), 是则设 SWP_NOMOVE | SWP_NOSIZE
-//        阻止落位.
-//
-//        真最大化 (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) /
-//        SetWindowPlacement / WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max) 的
-//        WINDOWPOSCHANGING 几何 = 全工作区, 与 "snap 全屏" 几何相同, 用
-//        IsZoomed(hwnd) 区分 — 派发 WINDOWPOSCHANGING 之前 WINDOWPLACEMENT
-//        已更新, IsZoomed=true 时跳过过滤. 见 cpp 子类 proc.
+//      *与 EnableMaximize 的关系*:
+//        - 本接口 (EnableSnap(TRUE)) 让按钮变灰但保留 Win+↑ / API 通路.
+//        - EnableMaximize(FALSE) 在此基础上额外吞 SC_MAXIMIZE → 拦键盘 Win+↑
+//          + 双击标题栏 + 系统菜单 "最大化". (API 路径 ShowWindow 仍能用.)
+//        - 二者共享 WS_MAXIMIZEBOX strip 状态: 只要任一为禁用就 strip, 二者
+//          都启用才还原.
 //
 //      *bEnable=TRUE 的额外性能收益*: 既然 snap 不可能发生, SyncWindowState
 //      会跳过 IsWindowSnapped() 计算 (m_isSnapped 强制为 false), 省去每次
@@ -346,20 +351,17 @@ public:
 //      *副作用 / 限制*:
 //        * snap 几何检测有 2 px 容差, 用户手动恰好 resize 到 1/2 屏 / 1/4
 //          屏尺寸会被误拦. 概率极低 (要求 4 边都对齐 work area).
-//        * Snap Layouts 悬停飞出框 *仍会显示* (因为 WS_MAXIMIZEBOX 没动),
-//          但选 half/quarter 时被几何过滤拦掉, 选 "maximize" tile 走
-//          SC_MAXIMIZE 仍可用. 想隐藏飞出框, 配 EnableMaximize(FALSE).
 //        * 触摸板三指手势 / 屏幕投递的 snap 不走以上路径, 拦不住.
 //
-//      *bEnable=FALSE (从 TRUE 切回)*: 拦截过滤逻辑空转, IsWindowSnapped 计算
-//      恢复. 不需要重新 strip / restore.
+//      *bEnable=FALSE (从 TRUE 切回)*: 还原 WS_MAXIMIZEBOX (除非 EnableMaximize
+//      (FALSE) 仍然要求 strip), 几何过滤 / IsWindowSnapped 计算恢复.
 //
 //      *attach 时序*:
-//        * AttachToWnd 之前调本接口 → 仅记忆设置, 子类 proc 安装后立即生效.
+//        * AttachToWnd 之前调本接口 → 仅记忆设置, AttachToWnd 时按值 strip.
 //        * AttachToWnd 之后调本接口 → 立即生效.
 //
 //      返回 void (设置不会失败).
-//@参数 bEnable TRUE 阻止 snap (默认), FALSE 允许 snap (恢复系统行为).
+//@参数 bEnable TRUE 阻止 snap (默认, 按钮灰, 保留 Win+↑/API), FALSE 允许 snap.
 //@别名  启用Snap阻止()
     void EnableSnap(BOOL bEnable);
 
@@ -417,23 +419,29 @@ private:
                                           // 区间内: 阴影用 1-pass box blur 快速通道,
                                           // 退出后再渲一帧高质量 (3-pass ≈ 高斯).
 
-    // ===== Snap / 最大化 控制 (两套相互独立的开关) =====
+    // ===== Snap / 最大化 控制 =====
     //
     // m_snapDisabled (EnableSnap / IsSnapEnabled):
-    //   true  (默认) → 阻止 Aero Snap. 子类 proc 过滤 WM_WINDOWPOSCHANGING
-    //                  匹配 snap layout 几何的请求 + SyncWindowState 跳过
-    //                  IsWindowSnapped 计算 (m_isSnapped 强制 false).
+    //   true  (默认) → *字面禁 snap*. UpdateMaxBoxState 触发 strip WS_MAXIMIZEBOX
+    //                  (消除拖边 snap preview UI), 子类 proc 几何过滤兜底,
+    //                  SyncWindowState 跳过 IsWindowSnapped 计算 (m_isSnapped
+    //                  强制 false). *不* 吞 SC_MAXIMIZE — Win+↑ / API 仍可
+    //                  最大化.
     //   false           → snap 系统默认行为.
     //
     //   *与 CXBlur 语义反转*: CXBlur 的 m_snapEnabled=true 表示 snap *允许*,
     //   本类的 m_snapDisabled=true 表示 snap *被阻止*. 默认值都是 true 但
     //   含义相反 — 本类默认阻止 snap, CXBlur 默认允许. 详见 EnableSnap 文档.
     //
-    //   *不再触动 WS_MAXIMIZEBOX*. WS_MAXIMIZEBOX 由 m_maxDisabled 独立控制.
-    //
     // m_maxDisabled (EnableMaximize / IsMaximizeEnabled):
     //   false (默认) → 允许最大化 (与 XWnd_EnableMaxWindow 一致).
-    //   true             → 禁最大化: strip WS_MAXIMIZEBOX + 子类 proc 吞 SC_MAXIMIZE.
+    //   true             → 禁最大化: UpdateMaxBoxState 触发 strip WS_MAXIMIZEBOX
+    //                       (与 m_snapDisabled 共享 strip 状态) + 子类 proc 吞
+    //                       SC_MAXIMIZE.
+    //
+    // *WS_MAXIMIZEBOX strip 共享状态机*: m_snapDisabled || m_maxDisabled 任一
+    // 为 true 都 strip, 二者都 false 才还原. 由 UpdateMaxBoxState 集中维护,
+    // EnableSnap / EnableMaximize / AttachToWnd 三入口都调它.
     //
     // *区分 "用户最大化" vs "snap 全屏" (二者 WINDOWPOSCHANGING 几何相同 = 全
     // 工作区)*: 子类 proc 直接调 IsZoomed(hwnd). Win32 在派发 WINDOWPOSCHANGING
@@ -566,12 +574,15 @@ private:
     void CaptureMainStyles();    // Attach 第一次调: 抓 transparent / padding / layout 原值
     void RestoreMainStyles();    // Detach: 还原全部
 
-    // 最大化禁用: WS_MAXIMIZEBOX strip / restore. 调用方 (EnableMaximize /
-    // AttachToWnd / RestoreMainStyles) 在主线程, *不持任何锁*, 所以可以直接
-    // SetWindowPos(SWP_FRAMECHANGED) — 与 CXBlur 的死锁回避不同, 这里没有共享
-    // 状态需要锁.
+    // 最大化禁用: WS_MAXIMIZEBOX strip / restore. 调用方在主线程, *不持任何锁*,
+    // 所以可以直接 SetWindowPos(SWP_FRAMECHANGED) — 与 CXBlur 的死锁回避不同,
+    // 这里没有共享状态需要锁.
     void StripMaxBox();          // 记录原态 + 关 WS_MAXIMIZEBOX (n-op 若已 strip)
     void RestoreMaxBox();        // 还原 WS_MAXIMIZEBOX 到 strip 前 (n-op 若没 strip)
+    // WS_MAXIMIZEBOX 联合状态机: snap 阻止 / 最大化禁用 任一为 true 都 strip.
+    // EnableSnap / EnableMaximize / AttachToWnd 三个入口都调本函数, 不直接
+    // 用 StripMaxBox/RestoreMaxBox.
+    void UpdateMaxBoxState();
 
     // ===== DIB 管理 =====
     BOOL EnsureDib(int w, int h);
