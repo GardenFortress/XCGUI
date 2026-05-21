@@ -11,18 +11,19 @@
 | [`module_xcgui_image`](./module_xcgui_image/) | `CXImageEx : CXEle` | FFmpeg 图片元素, 静/动态 jpg/png/webp/heic/avif/gif/apng 等 |
 | [`module_xcgui_blur`](./module_xcgui_blur/) | `CXBlur : CXEle` | DWM 亚克力 (`ACCENT_ACRYLIC`), 元素级 alpha 控制, per-corner 圆角 |
 | [`module_xcgui_shadow`](./module_xcgui_shadow/) | `CXShadow` | Win11 风格窗口外阴影 + AA 圆角描边 + 圆角内圈背景, DPI 自适应, 不占客户区 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` | UI 工具集: 悬停气泡提示 (5 种语义 + 三角指针 + 渐显渐隐), 加载动画 (5 风格 + 元素/窗口附加) |
 
 详细 API 见各 `.h` 文件中的 `//@别名` 注释.
 
 ## 兼容性
 
-| 系统 | editdw / image | video | blur | shadow |
-|---|---|---|---|---|
-| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **ACCENT_ACRYLIC** | D2D + GDI+ DIB |
-| Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB |
-| Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB |
-| Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB |
-| Win7 SP1 (VMware 默认) | GDI 降级 | GDI+ 降级 + 软解 | 装饰层 | GDI+ DIB |
+| 系统 | editdw / image | video | blur | shadow | uitool |
+|---|---|---|---|---|---|
+| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **ACCENT_ACRYLIC** | D2D + GDI+ DIB | D2D |
+| Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB | D2D |
+| Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB | D2D |
+| Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB | D2D |
+| Win7 SP1 (VMware 默认) | GDI 降级 | GDI+ 降级 + 软解 | 装饰层 | GDI+ DIB | GDI+ 兜底 |
 
 > Win7 必须用 **FFmpeg 4.4.x**. 5.x+ 引入 Win8 API `WaitOnAddress`, 在 Win7 上加载即崩.
 
@@ -47,7 +48,7 @@ D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include*
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_editdw.h"          // 按需 include: editdw / video / image / blur
+#include "module_xcgui_editdw.h"          // 按需 include: editdw / video / image / blur / shadow / uitool
 
 XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
 ```
@@ -108,6 +109,68 @@ pShadow->SetCornerRadius(8);                 // 圆角逻辑像素 @96 DPI
 - 不要再给主窗设 `XWnd_SetRound` / `SetWindowRgn` (HRGN 1-bit 必锯齿, 与 AA 描边冲突)
 - 最大化 / aero snap 自动 ClearPadding 隐藏阴影, 还原后自动恢复
 - `WM_GETMINMAXINFO` 自动把 padding 加到 ptMinTrackSize, 用户配置的最小尺寸不被阴影框吃掉
+
+### `CXTooltip`
+
+鼠标悬停气泡提示 — 全 static API, 内部维护单例共享气泡窗口 + 全局源元素注册表, 同一时刻至多 1 个气泡.
+
+```cpp
+// 最简: 给一个按钮挂提示
+CXTooltip::AddEleTip(hBtn, L"保存当前文档");
+
+// 带语义图标 + 浅色主题 + 强制下方弹出
+CXTooltip::AddEleTipEx(hBtn, L"操作成功",
+    xtooltip_type_success,
+    xtooltip_theme_light);
+CXTooltip::SetArrowSide(hBtn, xtooltip_arrow_side_bottom);
+
+// 行为调优 (全局, 不分元素)
+CXTooltip::SetShowDelay(300);    // 鼠标停留多久后弹 (ms)
+CXTooltip::SetAutoCloseMs(3000); // 弹出后多久自动消失 (0 = 不自动)
+CXTooltip::SetFadeMs(150);       // 渐显/渐隐时长
+
+// 退出前一次清理 (反挂所有源元素事件 + 销毁气泡窗口)
+CXTooltip::Cleanup();
+```
+
+- 弹出窗口设 `WS_EX_TRANSPARENT` 鼠标穿透 + `XWnd_EnableNcaActive(FALSE)` 不抢焦点
+- `xtooltip_arrow_side_auto` (默认): 按鼠标进入源元素哪一边自动选反向; 4 个固定枚举强制锚定
+- 源元素销毁时自动反注册, 不需手动 `DelEleTip`
+
+### `CXLoading`
+
+加载动画 / 旋转指示器 — 3 种宿主形态 × 5 种动画风格 × 4 套主题.
+
+```cpp
+// 形态 1: 元素附加 (在已有元素上覆盖渲染 loading)
+CXLoading::AttachEle(hPanel);
+CXLoading::SetStyle(hPanel, xloading_style_spinner);
+CXLoading::SetText (hPanel, L"加载中...");
+// ...
+CXLoading::Stop  (hPanel);   // 让出 paint, 宿主原内容恢复显示
+CXLoading::Detach(hPanel);   // 完全反附加, 反挂事件
+
+// 形态 2: 窗口附加 (建子元素填满窗口客户区, 自动置顶 + layout_fill)
+CXLoading::AttachWnd(hWnd);  // 会减 XWnd_SetPadding 的内填充; resize 自适应
+CXLoading::SetStyle (hWnd, xloading_style_bars);
+CXLoading::SetTheme (hWnd, xloading_theme_auto);
+// ...
+CXLoading::Stop  (hWnd);     // 自建子元素被 XWidget_Show(FALSE) 隐藏, 不遮窗口内容
+CXLoading::Start (hWnd);     // 再次显示 + 重启动画
+CXLoading::Detach(hWnd);     // 销毁内部子元素, 完全释放
+
+// 形态 3: 自建元素 (返回 HELE, 用户自行控制坐标, 适合做模态遮罩)
+HELE hLoad = CXLoading::Create(0, 0, 200, 200, hParent);
+CXLoading::SetSize         (hLoad, 60, 60);
+CXLoading::SetCornerRadius (hLoad, 12);
+CXLoading::SetAccentColor  (hLoad, RGB(0xFF, 0x99, 0x00));
+```
+
+- 5 风格: `spinner` (圆环 ease 振荡) / `dots` (5 点错峰旋转) / `spokes` (12 辐条衰减) / `pulse` (单圈脉冲) / `bars` (4 胶囊条波动)
+- D2D 主路径 (PathGeometry + round-cap StrokeStyle) — 端帽与笔画严格对齐, sub-pixel 精度
+- GDI+ 兜底自动启用 (`XInitXCGUI(FALSE)` 或低端机), 笔画宽手动 ×dpi 物理化, cap 圆直径与笔画严格等宽
+- `Stop` 对自建元素 (`Create` / `AttachWnd`) 走 `XWidget_Show(FALSE)`, 对外部元素 (`AttachEle`) 走让出 paint
+- 元素/窗口销毁时自动释放 entry (无需显式 `Detach`); 进程退出前调 `CXLoading::Cleanup()` 兜底
 
 ## ⚠️ `CXBlur::ForceSystemTransparencyOn` 修改注册表
 

@@ -9,25 +9,36 @@
 //@模块备注  通用 UI 辅助工具集合, 模块文件名 *uitool* 仅作工程标记, 后续会持续加入
 //          多个 *顶层* 工具类 (Toast / Popover / HUD / Menu ...) — 每个独立 class,
 //          XCGUI 别名工具会逐个识别. 不再用嵌套 class 形式 (扫描器不识别).
-//          首发: CXTooltip (鼠标悬停气泡提示) —
+//
+//          已实现的顶层类:
+//          [1] CXTooltip — 鼠标悬停气泡提示
 //            - 全局静态注册表 + 共享气泡窗口, 同一时刻至多 1 个气泡显示.
 //            - 支持 普通 / 成功 / 信息 / 警告 / 错误 5 种语义 (后 4 个用内置 SVG 图标).
 //            - 支持 深色 / 浅色 / 自定义 / 跟随系统 4 套主题.
 //            - 显示/隐藏带 alpha 渐显渐隐过渡, 鼠标停留延迟 + 自动关闭时间均可配置.
 //            - 弹出窗口 鼠标穿透, 不抢焦点, 不干扰用户操作.
 //            - 自动检测鼠标从源元素哪条边进入, 绘制对应方向的三角指针 (指向源).
+//
+//          [2] CXLoading — 加载动画 (loading 指示器)
+//            - 3 种宿主形态: 元素附加 / 窗口附加 / 自建元素.
+//            - 5 种动画风格 (spinner 圆环 / dots 跳动点 / spokes 时钟辐条 /
+//              pulse 脉冲圈 / bars 频谱条).
+//            - 4 套主题 (深色 / 浅色 / 自定义 / 跟随系统), 文本/背景色与 CXTooltip
+//              语义一致但状态独立.
+//            - 强调色 (动画颜色) 默认: 深色=#FFFFFF / 浅色=#171717.
+//            - 居中显示, 默认 40x40, 可配, 可设单行文本 (用户等待小贴士).
+//            - 背景圆角支持统一/4 角分别 (扩展版本, CSS 顺序).
+//            - 多种 ease (cubic-in-out / cubic-out / sine) 衍生自 CSS 标准.
+//            - 元素/窗口销毁时自动释放, 共享 timer 心跳.
 //@模块信息结束
-
 // =================================================================
-// 头文件依赖拓扑顺序 (照规范, 不要改顺序)
+// 头文件依赖拓扑顺序说明:
+//   - @依赖 是 IDE 解析器(智能感知/别名/语法着色)用的, 不会自动注入 #include 给 cl.exe;
+//     所以下面要再用真实的 #include 链一次.
+//   - d2d1.h 必须先于 module_xcgui.h 完成.
 // =================================================================
 #include <d2d1.h>
 
-// 标准库
-#include <string>
-#include <unordered_map>
-
-// XCGUI 自身按拓扑顺序
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
@@ -43,6 +54,7 @@
 
 //@隐藏{
 class CXTooltip;
+class CXLoading;
 //@隐藏}
 
 ///<Tooltip 类型: 决定左侧图标 (default = 无图标, 1~4 = 对应 SVG)
@@ -99,6 +111,24 @@ enum xtooltip_align_v_
 	xtooltip_align_v_bottom = 2,
 };
 
+///<气泡三角箭头方向 — 决定气泡相对源元素出现在哪一侧, 以及三角顶点的指向.
+///默认 auto: 按鼠标进入元素时离哪条边最近, 自动选反向 (鼠标从左进 → 气泡在源右侧).
+///4 个固定方向用于强制锚定 (例如锚到工具栏按钮总是在下方弹出).
+//@别名 提示箭头方向
+enum xtooltip_arrow_side_
+{
+	//@别名 提示箭头方向_自动
+	xtooltip_arrow_side_auto   = 0,   ///<默认: 跟随鼠标进入边自动判断
+	//@别名 提示箭头方向_左
+	xtooltip_arrow_side_left   = 1,   ///<箭头在气泡左侧 → 气泡在源元素*右*方
+	//@别名 提示箭头方向_右
+	xtooltip_arrow_side_right  = 2,   ///<箭头在气泡右侧 → 气泡在源元素*左*方
+	//@别名 提示箭头方向_上
+	xtooltip_arrow_side_top    = 3,   ///<箭头在气泡上侧 → 气泡在源元素*下*方
+	//@别名 提示箭头方向_下
+	xtooltip_arrow_side_bottom = 4,   ///<箭头在气泡下侧 → 气泡在源元素*上*方
+};
+
 //@分组{ 提示气泡
 //@备注  全局气泡提示工具类, 全静态方法, 不需实例化. 注册的 HELE 在销毁时会被
 //       自动清理. 共享 1 个气泡窗口, 同一时刻至多显示 1 个气泡.
@@ -118,9 +148,9 @@ public:
 //@别名  添加元素提示()
 	static BOOL AddEleTip(HELE hEle, const wchar_t* pText);
 
-//@备注 移除元素的气泡提示. 已挂的元素事件保持挂载 (XCGUI 暂无 C1 版 RemoveEvent),
-//      回调内部会先 find registry, 找不到直接返回 — 安全无副作用. 元素 destroy
-//      时 XCGUI 自动清.
+//@备注 移除元素的气泡提示, 同步反挂 5 个源事件 (XEle_RemoveEventC 对 C/C1 通用).
+//      如果该元素正显示气泡, 会先立刻隐藏. 元素 destroy 时 XCGUI 自动清, 提前
+//      调本接口可在元素生命周期内动态启停 tooltip.
 //@参数 hEle 元素句柄
 //@返回 移除成功 TRUE, 未注册或元素无效 FALSE
 //@别名  移除元素提示()
@@ -205,6 +235,23 @@ public:
 //@返回 垂直对齐枚举
 //@别名  取垂直对齐()
 	static xtooltip_align_v_ GetAlignV(HELE hEle);
+
+	// ===== 箭头方向 (强制锚定 - 默认 auto 跟随鼠标进入边) =====
+
+//@备注 设置气泡三角箭头方向. 默认 auto = 按鼠标进入元素的边自动判断 (现状行为).
+//      传 left/right/top/bottom 强制锚定: 气泡永远出现在源元素的反方向那一侧.
+//      典型场景: 工具栏按钮固定下方弹气泡, 输入框始终在右侧提示等.
+//@参数 hEle 元素句柄
+//@参数 side 箭头方向枚举
+//@返回 成功 TRUE
+//@别名  置箭头方向()
+	static BOOL SetArrowSide(HELE hEle, xtooltip_arrow_side_ side);
+
+//@备注 取箭头方向. 未设置返 xtooltip_arrow_side_auto.
+//@参数 hEle 元素句柄
+//@返回 箭头方向枚举
+//@别名  取箭头方向()
+	static xtooltip_arrow_side_ GetArrowSide(HELE hEle);
 
 	// ===== 主题 / 颜色 =====
 
@@ -316,6 +363,284 @@ public:
 //@备注 全局清理: 销毁共享气泡窗口 + 释放 SVG 句柄 + 清空注册表.
 //      一般 XExitXCGUI() 之前 (或主窗口销毁后) 调一次. 进程退出时 OS 也会回收,
 //      但显式调用更稳妥, 避免 XCGUI 卸载顺序异常弹错框.
+//@别名  清理()
+	static void Cleanup();
+};
+//@分组}
+
+
+// =====================================================================
+// CXLoading — 加载动画指示器
+// =====================================================================
+
+///<Loading 动画风格 (5 种, 设计师手挑)
+//@别名 加载样式
+enum xloading_style_
+{
+	//@别名 加载样式_圆环
+	xloading_style_spinner  = 0,   ///<旋转圆环 + 弧长缓动 (Material Snake), 默认
+	//@别名 加载样式_跳点
+	xloading_style_dots     = 1,   ///<3 个上下跳动的点, 正弦缓动
+	//@别名 加载样式_辐条
+	xloading_style_spokes   = 2,   ///<12 条辐条循环淡出 (传统 Mac Beachball 风)
+	//@别名 加载样式_脉冲
+	xloading_style_pulse    = 3,   ///<2 圈同心扩散 + 透明度衰减, ease-out
+	//@别名 加载样式_频谱
+	xloading_style_bars     = 4,   ///<5 根竖条上下变高 (音频电平计风格)
+};
+
+///<Loading 颜色主题
+//@别名 加载主题
+enum xloading_theme_
+{
+	//@别名 加载主题_深色
+	xloading_theme_dark     = 0,   ///<文本 #F5F5F5 / 背景 #171717 / 强调 #FFFFFF (默认)
+	//@别名 加载主题_浅色
+	xloading_theme_light    = 1,   ///<文本 #171717 / 背景 #FFFFFF / 强调 #171717
+	//@别名 加载主题_自定义
+	xloading_theme_custom   = 2,   ///<使用 SetTextColor / SetBkColor / SetAccentColor 提供的颜色
+	//@别名 加载主题_自动
+	xloading_theme_auto     = 3,   ///<跟随系统 light/dark
+};
+
+//@分组{ 加载动画
+//@备注  全局加载动画工具类, 全静态方法. 支持以 3 种方式宿主:
+//         1) AttachEle  — 在已有元素上以 XE_PAINT 接管绘制 (loading 期间元素原内容
+//            被 loading 覆盖; Stop 后恢复)
+//         2) AttachWnd  — 同上, 但宿主是窗口 (整窗 loading 蒙层)
+//         3) Create     — 新建独立 loading 元素, 由用户布局
+//       元素/窗口销毁时自动释放. 共享 16ms 心跳 timer 驱动所有动画.
+//@别名  炫彩加载动画类
+class CXLoading
+{
+public:
+
+	// ===== 创建 / 附加 / 解除 =====
+
+//@备注 自建独立加载动画元素 (新建 HELE, 由调用方布局). 默认 启动 = TRUE.
+//@参数 x 元素 x 坐标 (相对父容器)
+//@参数 y 元素 y 坐标
+//@参数 cx 元素宽度
+//@参数 cy 元素高度
+//@参数 hParent 父容器 (HXCGUI: HELE 或 HWINDOW)
+//@返回 新建的元素句柄, 失败返回 NULL
+//@别名  创建()
+	static HELE Create(int x, int y, int cx, int cy, HXCGUI hParent);
+
+//@备注 附加到已有元素. 内部启用该元素 XE_PAINT 接管 — loading 运行期间
+//      元素内容被 loading 覆盖; Stop 或 Detach 后让出 paint, 恢复元素原渲染.
+//@参数 hEle 宿主元素句柄
+//@返回 成功 TRUE
+//@别名  附加元素()
+	static BOOL AttachEle(HELE hEle);
+
+//@备注 附加到窗口 (整窗 loading 蒙层). 同上.
+//@参数 hWnd 宿主窗口句柄
+//@返回 成功 TRUE
+//@别名  附加窗口()
+	static BOOL AttachWnd(HWINDOW hWnd);
+
+//@备注 解除附加 / 销毁注册项. 已挂的事件保持挂载 (XCGUI 暂无 C1 版 Remove),
+//      回调里若注册表查不到自动 *pbHandled = FALSE 让出渲染.
+//@参数 hHost 宿主 (HELE 或 HWINDOW)
+//@返回 成功 TRUE
+//@别名  解除()
+	static BOOL Detach(HXCGUI hHost);
+
+//@备注 是否已注册 loading.
+//@参数 hHost 宿主
+//@返回 已注册 TRUE
+//@别名  是否已附加()
+	static BOOL HasAttached(HXCGUI hHost);
+
+	// ===== 启动 / 停止 =====
+
+//@备注 启动动画 (开心跳 timer + 立即重绘).
+//@参数 hHost 宿主
+//@返回 成功 TRUE
+//@别名  启动()
+	static BOOL Start(HXCGUI hHost);
+
+//@备注 停止动画 (停心跳 + 让出 paint, 元素恢复原渲染).
+//@参数 hHost 宿主
+//@返回 成功 TRUE
+//@别名  停止()
+	static BOOL Stop(HXCGUI hHost);
+
+//@备注 是否正在运行.
+//@参数 hHost 宿主
+//@返回 运行中 TRUE
+//@别名  是否运行中()
+	static BOOL IsRunning(HXCGUI hHost);
+
+	// ===== 风格 =====
+
+//@备注 设置动画风格. 默认 spinner.
+//@参数 hHost 宿主
+//@参数 style 风格枚举
+//@返回 成功 TRUE
+//@别名  置样式()
+	static BOOL SetStyle(HXCGUI hHost, xloading_style_ style);
+
+//@备注 取风格.
+//@参数 hHost 宿主
+//@返回 风格枚举
+//@别名  取样式()
+	static xloading_style_ GetStyle(HXCGUI hHost);
+
+	// ===== 尺寸 (动画绘制区, 居中) =====
+
+//@备注 设置动画绘制尺寸 (在宿主中央). 默认 40x40.
+//@参数 hHost 宿主
+//@参数 cx 宽度 (逻辑像素, >=8)
+//@参数 cy 高度 (逻辑像素, >=8)
+//@返回 成功 TRUE
+//@别名  置尺寸()
+	static BOOL SetSize(HXCGUI hHost, int cx, int cy);
+
+//@备注 取动画绘制尺寸.
+//@参数 hHost 宿主
+//@参数 pcx 接收宽 (可 NULL)
+//@参数 pcy 接收高 (可 NULL)
+//@别名  取尺寸()
+	static void GetSize(HXCGUI hHost, int* pcx, int* pcy);
+
+	// ===== 文本 (单行小贴士) =====
+
+//@备注 设置 loading 期间显示的单行文本 (在动画下方居中). 实时可改, 用于
+//      "正在等待 / 小贴士" 类提示. 默认空 (不显示文本).
+//@参数 hHost 宿主
+//@参数 pText 文本, NULL/空 = 不显示文本
+//@返回 成功 TRUE
+//@别名  置文本()
+	static BOOL SetText(HXCGUI hHost, const wchar_t* pText);
+
+//@备注 取文本.
+//@参数 hHost 宿主
+//@返回 文本指针, 未注册返 NULL
+//@别名  取文本()
+	static const wchar_t* GetText(HXCGUI hHost);
+
+//@备注 设置文本字号 (磅, pt). 默认 9. 范围 [6, 72]. 改字号会重建该宿主的 HFONTX.
+//@参数 hHost 宿主
+//@参数 pt 字号 (磅)
+//@返回 成功 TRUE
+//@别名  置字号()
+	static BOOL SetFontSize(HXCGUI hHost, int pt);
+
+//@备注 取文本字号 (磅).
+//@参数 hHost 宿主
+//@返回 字号
+//@别名  取字号()
+	static int GetFontSize(HXCGUI hHost);
+
+	// ===== 主题 / 颜色 =====
+
+//@备注 设置主题. dark / light / custom / auto(跟随系统). 默认 dark.
+//@参数 hHost 宿主
+//@参数 theme 主题枚举
+//@返回 成功 TRUE
+//@别名  置主题()
+	static BOOL SetTheme(HXCGUI hHost, xloading_theme_ theme);
+
+//@备注 取主题.
+//@参数 hHost 宿主
+//@返回 主题枚举
+//@别名  取主题()
+	static xloading_theme_ GetTheme(HXCGUI hHost);
+
+//@备注 自定义文本颜色 (会切到 custom 主题).
+//@参数 hHost 宿主
+//@参数 color XCGUI ARGB
+//@返回 成功 TRUE
+//@别名  置文本颜色()
+	static BOOL SetTextColor(HXCGUI hHost, COLORREF color);
+
+//@备注 取文本颜色 (按当前主题).
+//@参数 hHost 宿主
+//@返回 ARGB
+//@别名  取文本颜色()
+	static COLORREF GetTextColor(HXCGUI hHost);
+
+//@备注 自定义背景色 (会切到 custom 主题).
+//@参数 hHost 宿主
+//@参数 color XCGUI ARGB
+//@返回 成功 TRUE
+//@别名  置背景颜色()
+	static BOOL SetBkColor(HXCGUI hHost, COLORREF color);
+
+//@备注 取背景色 (按当前主题).
+//@参数 hHost 宿主
+//@返回 ARGB
+//@别名  取背景颜色()
+	static COLORREF GetBkColor(HXCGUI hHost);
+
+//@备注 自定义动画强调色 (会切到 custom 主题). 该色会被用于动画主体笔画;
+//      非强调色 (淡色) 由本类内部按 RGB 通道一致原则自动派生 (alpha 衰减).
+//@参数 hHost 宿主
+//@参数 color XCGUI ARGB
+//@返回 成功 TRUE
+//@别名  置强调色()
+	static BOOL SetAccentColor(HXCGUI hHost, COLORREF color);
+
+//@备注 取强调色 (按当前主题).
+//@参数 hHost 宿主
+//@返回 ARGB
+//@别名  取强调色()
+	static COLORREF GetAccentColor(HXCGUI hHost);
+
+	// ===== 圆角 (背景) =====
+
+//@备注 统一设置 4 个圆角. 单位 = 逻辑像素. 默认 0 (直角).
+//@参数 hHost 宿主
+//@参数 radius 圆角半径
+//@返回 成功 TRUE
+//@别名  置圆角()
+	static BOOL SetCornerRadius(HXCGUI hHost, int radius);
+
+//@备注 取圆角 (返回 4 角中左上的值; 4 角不一致时其它角值丢失, 用 GetCornerRadiusEx).
+//@参数 hHost 宿主
+//@返回 圆角半径
+//@别名  取圆角()
+	static int GetCornerRadius(HXCGUI hHost);
+
+//@备注 分别设置 4 个圆角 (CSS 顺序: 左上 → 右上 → 右下 → 左下, 顺时针).
+//@参数 hHost 宿主
+//@参数 leftTop 左上 (CSS 第 1)
+//@参数 rightTop 右上 (CSS 第 2)
+//@参数 rightBottom 右下 (CSS 第 3)
+//@参数 leftBottom 左下 (CSS 第 4)
+//@返回 成功 TRUE
+//@别名  置圆角扩展()
+	static BOOL SetCornerRadiusEx(HXCGUI hHost, int leftTop, int rightTop, int rightBottom, int leftBottom);
+
+//@备注 取 4 个圆角 (CSS 顺序). 任意 p 参数为 NULL 时忽略.
+//@参数 hHost 宿主
+//@参数 pLeftTop 接收左上
+//@参数 pRightTop 接收右上
+//@参数 pRightBottom 接收右下
+//@参数 pLeftBottom 接收左下
+//@别名  取圆角扩展()
+	static void GetCornerRadiusEx(HXCGUI hHost, int* pLeftTop, int* pRightTop, int* pRightBottom, int* pLeftBottom);
+
+	// ===== 速度 =====
+
+//@备注 设置动画速度倍率. 1.0 = 默认, 2.0 = 双速, 0.5 = 半速. 范围 [0.1, 5.0].
+//@参数 hHost 宿主
+//@参数 speed 倍率
+//@返回 成功 TRUE
+//@别名  置速度()
+	static BOOL SetSpeed(HXCGUI hHost, float speed);
+
+//@备注 取速度倍率.
+//@参数 hHost 宿主
+//@返回 倍率
+//@别名  取速度()
+	static float GetSpeed(HXCGUI hHost);
+
+	// ===== 全局清理 =====
+
+//@备注 全局清理: 停所有 timer, 清空注册表.
 //@别名  清理()
 	static void Cleanup();
 };
