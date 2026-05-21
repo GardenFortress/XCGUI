@@ -569,12 +569,13 @@ public:
 //@备注 取音量按钮 HELE (CXButton).
 //@别名  取按钮音量()
 	HELE   GetBtnVolume()     const;
-//@备注 取音量面板 HELE (CXLayout). 首次点音量按钮才懒建, 此前为 NULL.
+//@备注 取音量面板 HELE (CXLayout). 随控件栏一起提前建, 初始隐藏;
+//      EnableControlBar(FALSE) 下未建控件栏时为 NULL.
 //      面板是 m_hEle 的 *子元素* (不是独立窗口),
 //      避开 DPI 位置计算 + 焦点夺取 两个问题.
 //@别名  取音量面板()
 	HELE   GetVolumePanel()   const;
-//@备注 取音量面板内的垂直 slider HELE.
+//@备注 取音量面板内的垂直 slider HELE. 随面板一起提前建.
 //@别名  取音量滑块()
 	HELE   GetSliderVolume()  const;
 
@@ -722,8 +723,11 @@ private:
 	// 整体结构 (CXLayout 自动布局, 不再手算坐标):
 	//   m_hEle (CXLayout, vertical, alignV=bottom, mouseThrough=FALSE)
 	//     └── m_hCtrlBar (CXLayout, horizontal, alignV=center, space=8, padding=12,0,12,0)
-	//            ├── m_hBtnPlay        (CXButton, 40x40, transparent)
-	//            ├── m_hBtnLoop        (CXButton, 40x40, transparent)
+	//            ├── m_hBtnPlay        (CXButton, button_type_check, 40x40, transparent)
+	//            │     check=TRUE  -> 播放中 (UI 由 UpdateControlBarPlayState 同步 m_state);
+	//            │     check=FALSE -> 暂停/停止/已结束/未打开. XE_BUTTON_CHECK 驱动 Play/Pause.
+	//            ├── m_hBtnLoop        (CXButton, button_type_check, 40x40, transparent)
+	//            │     check=TRUE/FALSE 直接对应 SetLoop/GetLoop, XE_BUTTON_CHECK 驱动.
 	//            ├── m_hSliderProgress (CXSliderBar, layout.width=weight:1, transparent)
 	//            ├── m_hLblTime        (CXShapeText, layout.width=auto, transparent)
 	//            └── m_hBtnVolume      (CXButton, 40x40, transparent)
@@ -743,12 +747,18 @@ private:
 	HELE    m_hSliderProgress = NULL;
 	HXCGUI  m_hLblTime        = NULL;     // CXShapeText -> HXCGUI (shape, 不是 element)
 	HELE    m_hBtnVolume      = NULL;
-	// 音量 面板: 仅在首次点 vol 按钮时懒建. 是 m_hEle 的子 (不是独立窗口),
-	// LayoutItem.width/height = disable -> 不参与父布局, 用 XEle_SetRect 绝对定位.
-	// 这样避开 独立窗口的 DPI 位置计算 + 焦点被夺 两个问题.
+	// 音量 面板: CreateControlBar() 后期 一起创建 (初始隐藏), 不再懒建.
+	// 创建后 才能 给 GetVolumePanel / GetSliderVolume 返回有效句柄 供外部改样式 / 注事件.
+	// 是 m_hEle 的子 (不是独立窗口), LayoutItem.width/height = disable -> 不参与父布局,
+	// 用 XEle_SetRect 绝对定位. 这样避开 独立窗口的 DPI 位置计算 + 焦点被夺 两个问题.
 	HELE    m_hVolPanel       = NULL;
 	HELE    m_hSliderVolume   = NULL;
 	BOOL    m_programmaticSliderUpdate = FALSE;
+	// 程式化 XBtn_SetCheck 反弹保护: m_hBtnPlay / m_hBtnLoop 是 button_type_check, 调
+	// XBtn_SetCheck 会触发 XE_BUTTON_CHECK -> OnBtnPlayCheck / OnBtnLoopCheck. 没有这个
+	// 标志的话: UpdateControlBarPlayState -> XBtn_SetCheck -> OnBtnPlayCheck -> Play/Pause
+	// -> UpdateControlBarPlayState -> ... 死循环. 与 m_programmaticSliderUpdate 同模式.
+	BOOL    m_programmaticBtnCheck = FALSE;
 	int     m_lastProgressPos = -1;
 	std::wstring m_lastTimeStr;
 	// ===== 进度条 拖动节流 + slider 锁定 =====
@@ -944,11 +954,17 @@ private:
 	// 若 m_programmaticSliderUpdate=TRUE 或 m_userSeeking, 跳过 (避免反向干扰用户拖动).
 	// bForce=true 跳过 m_seekInFlight short-circuit, 给 Stop() / 强制刷新场景用.
 	void UpdateControlBarPosition(double posSec, bool bForce = false);
-	// 播放状态变化 (Play/Pause/Stop/Ended) 时调. 切换 m_hBtnPlay 显示的 ▶ / ❚❚.
+	// 播放状态变化 (Play/Pause/Stop/Ended/Error) 时调. 切换 m_hBtnPlay 显示的 ▶ / ❚❚
+	// 同时把 button_type_check 的 check 状态同步到 m_state==playing.
+	// 内部用 m_programmaticBtnCheck 屏蔽自身触发的 XE_BUTTON_CHECK.
 	void UpdateControlBarPlayState();
-	// SetLoop 调用时同步循环按钮的 "已选中" 视觉状态.
+	// SetLoop 调用时同步循环按钮的 "已选中" 视觉状态. 内部用 m_programmaticBtnCheck 屏蔽
+	// XBtn_SetCheck 触发的 XE_BUTTON_CHECK 回环.
 	void UpdateControlBarLoopState();
-	// 音量面板 切换可见. 首次调懒建面板 + 垂直 slider; 之后只重新定位 + show/hide.
+	// CreateControlBar() 末尾调: 提前建好 音量面板 + 垂直 slider, 初始隐藏.
+	// 这样 GetVolumePanel / GetSliderVolume 在 Create() 后就能拿到有效句柄, 用户能提前 改样式 / 加额外事件.
+	void CreateVolumePanel();
+	// 音量面板 切换可见. 面板在 CreateVolumePanel 里提前建好, 这里只重新定位 + show/hide.
 	void ToggleVolumePanel();
 	// 隐藏面板. 供 OnLButtonUpVideo 点外部关闭 / 他按钮 click 时调.
 	void HideVolumePanel();
@@ -959,7 +975,7 @@ private:
 	// 16ms 定时器里调: 若 timeout 已到且面板不可见, 隐藏 bar.
 	void EvalAutoHide();
 	// 给 m_hEle / 控件栏 / 子控件 全挂上 XE_MOUSEMOVE -> NotifyUserActivity.
-	// 单独抽出, 因为音量面板 + 其子是懒建的, 建好后也得挂.
+	// 抽出作公共 helper, 避免 CreateControlBar / CreateVolumePanel 重复挂事件逻辑.
 	void HookMouseActivity(HELE h);
 	// 强制重排 + 重绘 控件栏. 在以下路径调:
 	//   - OnSizeImpl (m_hEle 尺寸变了)
@@ -972,8 +988,10 @@ private:
 
 	// ===== 控件栏 事件 回调 =====
 	// (OnLButtonUpCtrlBar 已删 - 控件栏默认鼠标穿透, 不需要点击处理)
-	int  OnBtnPlayClick        (HELE hEle, BOOL* pbHandled);
-	int  OnBtnLoopClick        (HELE hEle, BOOL* pbHandled);
+	// Play / Loop 按钮是 button_type_check, 走 XE_BUTTON_CHECK (带 bCheck 参数);
+	// Volume 按钮是默认 push 型, 走 XE_BNCLICK.
+	int  OnBtnPlayCheck        (HELE hEle, BOOL bCheck, BOOL* pbHandled);
+	int  OnBtnLoopCheck        (HELE hEle, BOOL bCheck, BOOL* pbHandled);
 	int  OnBtnVolumeClick      (HELE hEle, BOOL* pbHandled);
 	int  OnSliderProgressChange(HELE hEle, int pos, BOOL* pbHandled);
 	int  OnSliderVolumeChange  (HELE hEle, int pos, BOOL* pbHandled);

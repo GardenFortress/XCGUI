@@ -1821,13 +1821,21 @@ int CXVideo::OnTimerImpl(HELE /*hEle*/, UINT timerId, BOOL* /*pbHandled*/){
 }
 
 void CXVideo::DispatchPendingCallbacks(){
+	// stateChanged: 任一 pending 跳变 都代表 m_state 可能变了
+	// (opened: opening->stopped/playing; ended: ?->ended; error: ?->error).
+	// 脚本末尾 同步 控件栏播放按钮 的 check 状态与 文本, 避免 视频自然结束 后
+	// m_hBtnPlay 还停在 ❚❚ / check=TRUE.
+	bool stateChanged = false;
 	if (m_pendingOpened.exchange(false, std::memory_order_acq_rel)){
+		stateChanged = true;
 		if (m_cbOpened) m_cbOpened(this, m_userOpened);
 	}
 	if (m_pendingEnded.exchange(false, std::memory_order_acq_rel)){
+		stateChanged = true;
 		if (m_cbEnded) m_cbEnded(this, m_userEnded);
 	}
 	if (m_pendingError.exchange(false, std::memory_order_acq_rel)){
+		stateChanged = true;
 		int code; std::wstring msg;
 		{
 			std::lock_guard<std::mutex> lk(m_pendingErrMutex);
@@ -1836,6 +1844,7 @@ void CXVideo::DispatchPendingCallbacks(){
 		}
 		if (m_cbError) m_cbError(this, code, msg.c_str(), m_userError);
 	}
+	if (stateChanged) UpdateControlBarPlayState();
 }
 
 //============================================================================
@@ -2521,19 +2530,23 @@ void CXVideo::CreateControlBar(){
 		if (tip) XEle_SetToolTip(h, tip);             // 悬停提示
 	};
 
-	// Play / Pause (40x40 固定)
+	// Play / Pause (40x40 固定). button_type_check: 点击自动 toggle check 状态,
+	// XCGUI 在重绘时会同时走 选中 / 未选中 两套背景, 能直接表达 "正在播放" 的状态;
+	// 事件走 XE_BUTTON_CHECK 拿到新的 bCheck, 不需再去 load m_state 翻译.
 	m_hBtnPlay = XBtn_Create(0, 0, kBtnW, kBtnH, L"▶", (HXCGUI)m_hCtrlBar);
+	XBtn_SetTypeEx(m_hBtnPlay, button_type_check);
 	styleButton(m_hBtnPlay, L"播放/暂停");
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnPlay, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnPlay, layout_size_fixed, kBtnH);
-	XEle_RegEventCPP1(m_hBtnPlay, XE_BNCLICK, &CXVideo::OnBtnPlayClick);
+	XEle_RegEventCPP1(m_hBtnPlay, XE_BUTTON_CHECK, &CXVideo::OnBtnPlayCheck);
 
-	// Loop (40x40 固定)
+	// Loop (40x40 固定). 同上用 button_type_check, check==SetLoop 完全一一对应.
 	m_hBtnLoop = XBtn_Create(0, 0, kBtnW, kBtnH, L"↻", (HXCGUI)m_hCtrlBar);
+	XBtn_SetTypeEx(m_hBtnLoop, button_type_check);
 	styleButton(m_hBtnLoop, L"循环播放");
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnLoop, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnLoop, layout_size_fixed, kBtnH);
-	XEle_RegEventCPP1(m_hBtnLoop, XE_BNCLICK, &CXVideo::OnBtnLoopClick);
+	XEle_RegEventCPP1(m_hBtnLoop, XE_BUTTON_CHECK, &CXVideo::OnBtnLoopCheck);
 
 	// Progress slider (weight=1 弹性, 吃掉中间剩余宽度)
 	m_hSliderProgress = XSliderBar_Create(0, 0, 100, kSliderH, (HXCGUI)m_hCtrlBar);
@@ -2577,7 +2590,10 @@ void CXVideo::CreateControlBar(){
 	HookMouseActivity(m_hSliderProgress);
 	HookMouseActivity(m_hBtnVolume);
 	// 时间标签 m_hLblTime 是 HXCGUI shape 不是 HELE; shape 不接收鼠标事件, 跳过.
-	// 音量面板 + 其 slider 是懒建的, 在 ToggleVolumePanel 里建好后再挂.
+
+	// 音量面板 + slider 提前建好 (初始隐藏), 避免 "首次点 vol" 才能拿句柄.
+	// 这样用户在 Create() 后就能 GetVolumePanel/GetSliderVolume + 改颜色/添额外事件.
+	CreateVolumePanel();
 
 	// bar 初始可见, tick = now. 用户 timeout 内有任何活动会续命, 否则隐藏.
 	m_lastUserActivityTick = GetTickCount();
@@ -2645,41 +2661,68 @@ void CXVideo::UpdateControlBarPosition(double posSec, bool bForce){
 void CXVideo::UpdateControlBarPlayState(){
 	if (!m_hBtnPlay) return;
 	int s = m_state.load(std::memory_order_acquire);
-	const wchar_t* glyph = (s == xvideo_state_playing) ? L"❚❚" : L"▶";
-	XBtn_SetText(m_hBtnPlay, glyph);
+	BOOL playing = (s == xvideo_state_playing) ? TRUE : FALSE;
+	const wchar_t* glyph = playing ? L"❚❚" : L"▶";
+	// XBtn_SetCheck 会触发 XE_BUTTON_CHECK -> OnBtnPlayCheck, 后者看到 程式化 标志
+	// 会直接 return, 避免 Play/Pause -> UpdateControlBarPlayState 死循环.
+	m_programmaticBtnCheck = TRUE;
+	XBtn_SetCheck(m_hBtnPlay, playing);
+	XBtn_SetText (m_hBtnPlay, glyph);
+	m_programmaticBtnCheck = FALSE;
 }
 
 void CXVideo::UpdateControlBarLoopState(){
 	if (!m_hBtnLoop) return;
 	BOOL on = m_loop.load(std::memory_order_acquire) ? TRUE : FALSE;
-	// 用 XBtn_SetCheck 体现 "已激活" 视觉; XCGUI 对 push 型按钮也会画 check 高亮.
+	// button_type_check: check 状态是按钮原生表达, XCGUI 重绘时同步带上 选中 背景.
+	// 这一调会触发 XE_BUTTON_CHECK -> OnBtnLoopCheck, 用 m_programmaticBtnCheck 拦住.
+	m_programmaticBtnCheck = TRUE;
 	XBtn_SetCheck(m_hBtnLoop, on);
+	m_programmaticBtnCheck = FALSE;
 }
 
 // (OnLButtonUpCtrlBar 已删 - 控件栏默认鼠标穿透, 空白处点击直接透到视频区,
-//  没有需要拦截的事件; 按钮们的 XE_BNCLICK 在子级被消费, 不冲突.)
+//  没有需要拦截的事件; 按钮们的 XE_BUTTON_CHECK / XE_BNCLICK 在子级被消费, 不冲突.)
 
-int CXVideo::OnBtnPlayClick(HELE /*hEle*/, BOOL* /*pbHandled*/){
-	// 复用视频区的 toggle 逻辑.
+// Play 按钮 XE_BUTTON_CHECK: bCheck=TRUE -> 用户要求播放; bCheck=FALSE -> 用户要求暂停.
+// 由 button_type_check 自动 toggle, 不用手工 load m_state 反推动作.
+int CXVideo::OnBtnPlayCheck(HELE /*hEle*/, BOOL bCheck, BOOL* /*pbHandled*/){
+	// 程式化 XBtn_SetCheck (UpdateControlBarPlayState) 触发的这路回调 直接忽略,
+	// 避免 UI 同步 -> Play/Pause -> UI 同步 死循环.
+	if (m_programmaticBtnCheck) return 0;
 	int s = m_state.load(std::memory_order_acquire);
-	switch (s){
-	case xvideo_state_playing: Pause(); break;
-	case xvideo_state_paused:
-	case xvideo_state_stopped:
-	case xvideo_state_ended:
-	case xvideo_state_opening:
-		Play();
-		break;
-	default:
-		return 0;
+	if (bCheck){
+		// 要求播放. closed/error 无媒体 - 下面 fall through 走 UI 回滚.
+		switch (s){
+		case xvideo_state_paused:
+		case xvideo_state_stopped:
+		case xvideo_state_ended:
+		case xvideo_state_opening:
+			Play();           // 内部会 UpdateControlBarPlayState
+			return 0;
+		case xvideo_state_playing:
+			// 已经在播 - check 与实际 一致, 什么都不必做.
+			return 0;
+		default:
+			break;            // closed / error: 走下面 回滚 check 状态
+		}
+	} else {
+		// 要求暂停. 仅 playing 状态有意义.
+		if (s == xvideo_state_playing){
+			Pause();              // 内部会 UpdateControlBarPlayState
+			return 0;
+		}
+		// 其他状态 (已经不在播): 走下面同步一下 check 以防不一致.
 	}
+	// 到这里表示 当前 state 不允许 该动作 (如 closed/error 下点击), 把 button 视觉 回滚 到 state.
 	UpdateControlBarPlayState();
 	return 0;
 }
 
-int CXVideo::OnBtnLoopClick(HELE /*hEle*/, BOOL* /*pbHandled*/){
-	BOOL cur = m_loop.load(std::memory_order_acquire) ? TRUE : FALSE;
-	SetLoop(!cur);
+// Loop 按钮 XE_BUTTON_CHECK: 直接把 bCheck 同步到 SetLoop, 不需 toggle 逻辑.
+int CXVideo::OnBtnLoopCheck(HELE /*hEle*/, BOOL bCheck, BOOL* /*pbHandled*/){
+	if (m_programmaticBtnCheck) return 0;
+	SetLoop(bCheck);
 	// SetLoop 内部已调 UpdateControlBarLoopState, 这里无需重复.
 	return 0;
 }
@@ -2725,9 +2768,13 @@ int CXVideo::OnSliderProgressChange(HELE /*hEle*/, int pos, BOOL* /*pbHandled*/)
 }
 
 //============================================================================
-// 音量 *面板* (inline, 非独立窗口): 懒建. 第一次点 vol 按钮时建 m_hVolPanel
-// (CXLayout 子元素, 不是 HWINDOW), 内嵌 vertical CXSliderBar. 之后只切换 show/hide
-// 并 *重新定位* (按钮位置可能跟控件栏 reflow 变了).
+// 音量 *面板* (inline, 非独立窗口): CreateControlBar() 末尾 一起建, 初始隐藏.
+// CreateVolumePanel 负责创建 m_hVolPanel (CXLayout 子元素, 不是 HWINDOW) +
+// 内嵌 vertical CXSliderBar; ToggleVolumePanel / HideVolumePanel 只负责 重新定位 +
+// show/hide 切换.
+//
+// 提前建 (而不是懒建) 的原因: 用户拿 GetVolumePanel / GetSliderVolume 句柄 改样式 /
+// 注额外事件的场景 并不罕见, 懒建会造成 Create() 后拿到 NULL, 体验差.
 //
 // 为啥不用 popup 窗口: ① 独立窗口要做 DPI 物理像素 -> 逻辑像素换算 (XCGUI 客户区
 // 已是 DPI 缩放后的逻辑像素, 跟独立顶层窗口的物理像素不一致); ② 独立窗口会夺焦点
@@ -2753,59 +2800,63 @@ void CXVideo::HideVolumePanel(){
 	if (m_hVolPanel) XWidget_Show((HXCGUI)m_hVolPanel, FALSE);
 }
 
-void CXVideo::ToggleVolumePanel(){
-	if (!m_hEle || !m_hBtnVolume) return;
+// 创建 音量面板 + 内嵌垂直 slider, 初始隐藏. CreateControlBar() 末尾调 一次.
+// 拆出独立函数 是为了 不肥 CreateControlBar; 逻辑上是控件栏的子体系.
+void CXVideo::CreateVolumePanel(){
+	if (!m_hEle || m_hVolPanel) return;
+	// 面板挂到 m_hEle (视频元素) 下, 不参与父 layout (size=disable).
+	// 初始 rect 占位, ToggleVolumePanel 里显示前会重新定位.
+	m_hVolPanel = XLayout_Create(0, 0, kVolPopupW, kVolPopupH, (HXCGUI)m_hEle);
+	if (!m_hVolPanel) return;
+	// 不参与 m_hEle 的纵向 layout (否则会跟控件栏一起被排进 vertical stack).
+	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hVolPanel, layout_size_disable, 0);
+	XWidget_LayoutItem_SetHeight((HXCGUI)m_hVolPanel, layout_size_disable, 0);
+	// 面板自己是 vertical layout, 内边距 8, 子节点 (slider) 横向居中.
+	XLayoutBox_EnableHorizon(m_hVolPanel, FALSE);
+	XLayoutBox_SetAlignH(m_hVolPanel, layout_align_center);
+	XEle_SetPadding(m_hVolPanel, 8, 8, 8, 8);
+	// 面板背景: 复用控件栏背景色, 视觉一致.
+	XEle_EnableBkTransparent(m_hVolPanel, FALSE);
+	XEle_AddBkFill(m_hVolPanel, element_state_flag_focus_no, m_ctrlBarBg);
+	XEle_EnableDrawBorder(m_hVolPanel, FALSE);
 
-	// ---- 1. 首次调: 懒建面板 + slider ----
-	if (!m_hVolPanel){
-		// 面板挂到 m_hEle (视频元素) 下, 不参与父 layout (size=disable).
-		// 初始 rect 占位, 下面 RepositionVolPanel 再算.
-		m_hVolPanel = XLayout_Create(0, 0, kVolPopupW, kVolPopupH, (HXCGUI)m_hEle);
-		if (!m_hVolPanel) return;
-		// 不参与 m_hEle 的纵向 layout (否则会跟控件栏一起被排进 vertical stack).
-		XWidget_LayoutItem_SetWidth ((HXCGUI)m_hVolPanel, layout_size_disable, 0);
-		XWidget_LayoutItem_SetHeight((HXCGUI)m_hVolPanel, layout_size_disable, 0);
-		// 面板自己是 vertical layout, 内边距 8, 子节点 (slider) 横向居中.
-		XLayoutBox_EnableHorizon(m_hVolPanel, FALSE);
-		XLayoutBox_SetAlignH(m_hVolPanel, layout_align_center);
-		XEle_SetPadding(m_hVolPanel, 8, 8, 8, 8);
-		// 面板背景: 复用控件栏背景色, 视觉一致.
-		XEle_EnableBkTransparent(m_hVolPanel, FALSE);
-		XEle_AddBkFill(m_hVolPanel, element_state_flag_focus_no, m_ctrlBarBg);
-		XEle_EnableDrawBorder(m_hVolPanel, FALSE);
-
-		// 嵌套 vertical slider. SliderBar 0=底, max=顶 (XCGUI 默认从下到上, 跟音量直觉一致).
-		m_hSliderVolume = XSliderBar_Create(0, 0, 20, kVolPopupH - 16, (HXCGUI)m_hVolPanel);
-		if (m_hSliderVolume){
-			XSliderBar_EnableHorizon(m_hSliderVolume, FALSE);
-			XSliderBar_SetRange(m_hSliderVolume, kVolumeRange);
-			XEle_EnableBkTransparent(m_hSliderVolume, TRUE);
-			// 跟进度 slider 一样, 去边框 + 去焦点虚线.
-			XEle_EnableDrawBorder(m_hSliderVolume, FALSE);
-			XEle_EnableDrawFocus (m_hSliderVolume, FALSE);
-			// slider 在面板里: 宽度固定 20, 高度 fill 余下空间.
-			XWidget_LayoutItem_SetWidth ((HXCGUI)m_hSliderVolume, layout_size_fixed, 20);
-			XWidget_LayoutItem_SetHeight((HXCGUI)m_hSliderVolume, layout_size_fill,  0);
-			int volPos = (int)(m_volume * kVolumeRange + 0.5);
-			XSliderBar_SetPos(m_hSliderVolume, volPos);
-			XEle_RegEventCPP1(m_hSliderVolume, XE_SLIDERBAR_CHANGE,
-			                  &CXVideo::OnSliderVolumeChange);
-		}
-		// 自动隐藏: 面板 + 内部 slider 都挂 MouseMove, 用户调音量时算"活动".
-		HookMouseActivity(m_hVolPanel);
-		HookMouseActivity(m_hSliderVolume);
-		// 首次建完先隐藏, 下面再 toggle.
-		XWidget_Show((HXCGUI)m_hVolPanel, FALSE);
+	// 嵌套 vertical slider. SliderBar 0=底, max=顶 (XCGUI 默认从下到上, 跟音量直觉一致).
+	m_hSliderVolume = XSliderBar_Create(0, 0, 20, kVolPopupH - 16, (HXCGUI)m_hVolPanel);
+	if (m_hSliderVolume){
+		XSliderBar_EnableHorizon(m_hSliderVolume, FALSE);
+		XSliderBar_SetRange(m_hSliderVolume, kVolumeRange);
+		XEle_EnableBkTransparent(m_hSliderVolume, TRUE);
+		// 跟进度 slider 一样, 去边框 + 去焦点虚线.
+		XEle_EnableDrawBorder(m_hSliderVolume, FALSE);
+		XEle_EnableDrawFocus (m_hSliderVolume, FALSE);
+		// slider 在面板里: 宽度固定 20, 高度 fill 余下空间.
+		XWidget_LayoutItem_SetWidth ((HXCGUI)m_hSliderVolume, layout_size_fixed, 20);
+		XWidget_LayoutItem_SetHeight((HXCGUI)m_hSliderVolume, layout_size_fill,  0);
+		int volPos = (int)(m_volume * kVolumeRange + 0.5);
+		XSliderBar_SetPos(m_hSliderVolume, volPos);
+		XEle_RegEventCPP1(m_hSliderVolume, XE_SLIDERBAR_CHANGE,
+		                  &CXVideo::OnSliderVolumeChange);
 	}
+	// 自动隐藏: 面板 + 内部 slider 都挂 MouseMove, 用户调音量时算"活动".
+	HookMouseActivity(m_hVolPanel);
+	HookMouseActivity(m_hSliderVolume);
+	// 面板初始隐藏, 等 ToggleVolumePanel 控着 show/hide.
+	XWidget_Show((HXCGUI)m_hVolPanel, FALSE);
+}
 
-	// ---- 2. 切换可见 ----
+void CXVideo::ToggleVolumePanel(){
+	// 面板在 CreateVolumePanel 里已提前建好; 这里只需 toggle + 重新定位.
+	// EnableControlBar(FALSE) 场景下 m_hBtnVolume / m_hVolPanel 均为 NULL, 直接返.
+	if (!m_hEle || !m_hBtnVolume || !m_hVolPanel) return;
+
+	// ---- 1. 切换可见 ----
 	BOOL nowShow = XWidget_IsShow((HXCGUI)m_hVolPanel);
 	if (nowShow){
 		XWidget_Show((HXCGUI)m_hVolPanel, FALSE);
 		return;
 	}
 
-	// ---- 3. 显示前重新定位 (按钮位置可能因 reflow 变了) ----
+	// ---- 2. 显示前重新定位 (按钮位置可能因 reflow 变了) ----
 	// 都是 XCGUI 元素坐标 (已 DPI-aware 的逻辑像素), 无需手动 DPI 换算.
 	// 先强制 reflow 一次: bar 可能是刚从隐藏被 NotifyUserActivity 拉回来的,
 	// 此时 XEle_GetRect 拿到的可能还是 stale 的旧坐标.
