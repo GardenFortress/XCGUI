@@ -753,6 +753,14 @@ private:
 	// 用 XEle_SetRect 绝对定位. 这样避开 独立窗口的 DPI 位置计算 + 焦点被夺 两个问题.
 	HELE    m_hVolPanel       = NULL;
 	HELE    m_hSliderVolume   = NULL;
+	// SVG 图标句柄 (硬编码, EnsureSvgsLoaded 里 XSvg_LoadStringUtf8 加载, OnDestroyImpl 里 XSvg_Destroy).
+	// Play/暂停 互换; 循环开/关 互换; 有声/静音 互换.
+	HSVG    m_hSvgPlay        = NULL;     // play.svg       (当前未在播)
+	HSVG    m_hSvgSuspend     = NULL;     // suspend.svg    (当前在播, 显示暂停图标)
+	HSVG    m_hSvgLoop        = NULL;     // loop.svg       (循环开)
+	HSVG    m_hSvgLoopClose   = NULL;     // loop_close.svg (循环关)
+	HSVG    m_hSvgVoice       = NULL;     // voice.svg      (有声)
+	HSVG    m_hSvgVoiceMute   = NULL;     // voice_mute.svg (静音 / volume==0)
 	BOOL    m_programmaticSliderUpdate = FALSE;
 	// 程式化 XBtn_SetCheck 反弹保护: m_hBtnPlay / m_hBtnLoop 是 button_type_check, 调
 	// XBtn_SetCheck 会触发 XE_BUTTON_CHECK -> OnBtnPlayCheck / OnBtnLoopCheck. 没有这个
@@ -966,6 +974,10 @@ private:
 	void CreateVolumePanel();
 	// 音量面板 切换可见. 面板在 CreateVolumePanel 里提前建好, 这里只重新定位 + show/hide.
 	void ToggleVolumePanel();
+	// SVG 图标资源: 首次调时 XSvg_LoadStringUtf8 从硬编码字串建好, 后续成幂等.
+	void EnsureSvgsLoaded();
+	// 释放 所有 SVG 句柄. OnDestroyImpl 里调, 避免 XCGUI 卸载后句柄变陆离.
+	void DestroySvgs();
 	// 隐藏面板. 供 OnLButtonUpVideo 点外部关闭 / 他按钮 click 时调.
 	void HideVolumePanel();
 	// 面板当前是否可见.
@@ -998,6 +1010,21 @@ private:
 	// XE_MOUSEMOVE 公共 handler: 所有挂了 HookMouseActivity 的元素共用,
 	// 不区分来源, 都视作"用户活动".
 	int  OnMouseMoveActivity   (HELE hEle, UINT nFlags, POINT* pPt, BOOL* pbHandled);
+
+	// ===== 控件栏 自绘 (XE_PAINT, pbHandled=TRUE 完全接管) =====
+	// 三个按钮 按 当前逻辑状态 选不同 SVG 画到中心:
+	//   Play  : m_state==playing -> suspend.svg (表示按下这个就暂停); 否则 play.svg.
+	//   Loop  : m_loop==TRUE     -> loop.svg     (已开循环);             否则 loop_close.svg.
+	//   Volume: m_muted || m_volume<=0 -> voice_mute.svg;                  否则 voice.svg.
+	// 布局公式与用户 spec 一致: x = rc.right/2 - w/2, y = rc.bottom/2 - h/2.
+	int  OnPaintBtnPlay        (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int  OnPaintBtnLoop        (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int  OnPaintBtnVolume      (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	// Slider 轨道 (进度 + 音量 共用): 画 35% 白 底 + #0099FF 填充.
+	// 水平 vs 垂直 从 client rect 宽高比例推断. 垂直下填充从底朝上 (XSliderBar 0=底).
+	int  OnPaintSlider         (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	// Slider 滑块 (XSliderBar_GetButton 返回的子元素): 画 #F7F7F7 实心圆.
+	int  OnPaintSliderThumb    (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
 
 	// 渲染分流: D2D 主路径 / GDI 兜底.
 	void OnPaintD2D(ID2D1RenderTarget* rt, HDRAW hDraw);

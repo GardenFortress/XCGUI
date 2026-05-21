@@ -95,6 +95,24 @@ constexpr int kVolPopupH      = 140;
 constexpr COLORREF kCtrlBarBg    = RGBA(0,   0,   0,   255);  // 默认 纯黑不透明
 constexpr COLORREF kCtrlBarFg    = RGBA(255, 255, 255, 255);  // 默认 白色文字
 
+// ===== Slider 默认样式 (用户 spec) =====
+// 轨道底色 35% 白 (alpha = 0.35*255 ≈ 89). XCGUI XDraw_FillRectColor 走 D2D/GDI+,
+// 都正常支持 alpha 通道半透混合 (跟 BkFill 不同, BkFill 不支持 alpha).
+constexpr COLORREF kSliderTrackBg   = RGBA(255, 255, 255, 89);   // 35% 白
+// 已填充段: #0099FF (R=0, G=0x99, B=0xFF), 不透明.
+constexpr COLORREF kSliderTrackFill = RGBA(0x00, 0x99, 0xFF, 255);
+// 滑块按钮: #F7F7F7 实心圆 (用 XDraw_FillEllipse 而非用户原说的 DrawArcF -
+// DrawArcF 只画圆弧轮廓, 不填充; 截图视觉是实心圆 -> FillEllipse 才匹配).
+constexpr COLORREF kSliderThumb     = RGBA(0xF7, 0xF7, 0xF7, 255);
+// 轨道 视觉厚度 (横向 -> 高, 纵向 -> 宽). 4px 跟截图比例匹配.
+constexpr int      kSliderTrackThk  = 4;
+// 滑块 直径. 默认 14, kSliderH 一致, 截图也是这种比例.
+constexpr int      kSliderThumbDia  = 14;
+
+// SVG 图标 (硬编码 UTF-8 字面量, 用 R"SVG(...)SVG" 避免转义).
+// 内容 1:1 来自 ./svg/*.svg, 通过单独的 .inc 文件包含进来防 .cpp 体积无脑膨胀.
+#include "module_xcgui_video_svgs.inc"
+
 } // namespace
 
 //============================================================================
@@ -243,6 +261,8 @@ int CXVideo::OnDestroyImpl(HELE /*hEle*/, BOOL* /*pbHandled*/){
 	m_d2dBmpW = m_d2dBmpH = 0;
 	// GDI 离屏 DIB / DC 释放 (GDI handle 数量上限 10000, 不释会泄漏).
 	ReleaseGdiDib();
+	// SVG 句柄释放: XSvg_Destroy. XCGUI 卸载后调会 句柄 invalid 弹错框, 赶在这里清掉.
+	DestroySvgs();
 
 	// 关键修复: 元素被 XCGUI 销毁后, m_hEle 已成陈旧句柄. 后续 ~CXVideo -> Close()
 	// 里的 RedrawSelf 拿这个陈旧值去调 XEle_Redraw, 会报 "句柄无效 0x13" 弹窗.
@@ -2251,14 +2271,29 @@ double CXVideo::GetFrameRate() const   { return m_frameRate; }
 BOOL   CXVideo::HasAudio() const       { return m_hasAudio ? TRUE : FALSE; }
 
 void CXVideo::SetVolume(float v01){
+	float prev = m_volume;
 	// NaN / Inf 防御: 用户调 SetVolume(0.0/0.0) 之类拿到 NaN, NaN 的所有 < > 比较都 false,
 	// 会直接落进 m_volume, 乘到样本上 -> 输出爆音 / 全静音 (取决于 FPU 状态). 一次性 fix.
 	if (!(v01 == v01) || v01 < 0.0f) v01 = 0.0f;  // (v != v) 是 NaN 唯一可移植判定
 	if (v01 > 1.0f) v01 = 1.0f;
 	m_volume = v01;
+	// 跨 0 边界 -> voice.svg / voice_mute.svg 需切换, 重绘音量按钮.
+	// 进一步: 选择背后画的 svg 是 逻辑 m_muted || m_volume<=0, 跨边界 才需重绘.
+	BOOL wasMute = (prev <= 0.0f) ? TRUE : FALSE;
+	BOOL nowMute = (m_volume <= 0.0f) ? TRUE : FALSE;
+	if (wasMute != nowMute && m_hBtnVolume){
+		XEle_Redraw(m_hBtnVolume, FALSE);
+	}
 }
 float CXVideo::GetVolume() const { return m_volume; }
-void  CXVideo::SetMute(BOOL bMute){ m_muted = bMute; }
+void  CXVideo::SetMute(BOOL bMute){
+	BOOL prev = m_muted;
+	m_muted = bMute ? TRUE : FALSE;
+	// 静音状态变了 -> voice.svg <-> voice_mute.svg 互换, 重绘音量按钮.
+	if (prev != m_muted && m_hBtnVolume){
+		XEle_Redraw(m_hBtnVolume, FALSE);
+	}
+}
 BOOL  CXVideo::IsMuted() const { return m_muted; }
 
 void CXVideo::SetLoop(BOOL bLoop){
@@ -2522,11 +2557,14 @@ void CXVideo::CreateControlBar(){
 
 	// XCGUI 的 COLORREF 是 ARGB, 透明像素 alpha=0; 不能用 Windows RGB(255,255,255) (alpha=0).
 	// 用 kCtrlBarFg = RGBA(255,255,255,255) 保证 *不透明白*.
-	auto styleButton = [this](HELE h, const wchar_t* tip){
+	// IDC_HAND: 鼠标停在按钮上变小手指, 提示 "可点". 系统共享句柄, 不需 DestroyCursor.
+	HCURSOR hCurHand = ::LoadCursorW(NULL, IDC_HAND);
+	auto styleButton = [this, hCurHand](HELE h, const wchar_t* tip){
 		XEle_EnableBkTransparent(h, TRUE);
 		XEle_EnableDrawBorder(h, FALSE);              // 关默认边框
 		XEle_EnableDrawFocus(h, FALSE);               // 关 焦点虚线框 (XCGUI 默认会画一圈虚线)
 		XEle_SetTextColor(h, m_ctrlBarFg);
+		if (hCurHand) XEle_SetCursor(h, hCurHand);    // 小手指光标 (LoadCursor 失败 fallback 默认箭头)
 		if (tip) XEle_SetToolTip(h, tip);             // 悬停提示
 	};
 
@@ -2539,6 +2577,8 @@ void CXVideo::CreateControlBar(){
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnPlay, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnPlay, layout_size_fixed, kBtnH);
 	XEle_RegEventCPP1(m_hBtnPlay, XE_BUTTON_CHECK, &CXVideo::OnBtnPlayCheck);
+	// XE_PAINT: 接管绘制, 根据 m_state 在中心画 play.svg / suspend.svg.
+	XEle_RegEventCPP1(m_hBtnPlay, XE_PAINT, &CXVideo::OnPaintBtnPlay);
 
 	// Loop (40x40 固定). 同上用 button_type_check, check==SetLoop 完全一一对应.
 	m_hBtnLoop = XBtn_Create(0, 0, kBtnW, kBtnH, L"↻", (HXCGUI)m_hCtrlBar);
@@ -2547,11 +2587,15 @@ void CXVideo::CreateControlBar(){
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnLoop, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnLoop, layout_size_fixed, kBtnH);
 	XEle_RegEventCPP1(m_hBtnLoop, XE_BUTTON_CHECK, &CXVideo::OnBtnLoopCheck);
+	XEle_RegEventCPP1(m_hBtnLoop, XE_PAINT, &CXVideo::OnPaintBtnLoop);
 
 	// Progress slider (weight=1 弹性, 吃掉中间剩余宽度)
 	m_hSliderProgress = XSliderBar_Create(0, 0, 100, kSliderH, (HXCGUI)m_hCtrlBar);
 	XSliderBar_EnableHorizon(m_hSliderProgress, TRUE);
 	XSliderBar_SetRange(m_hSliderProgress, kProgressRange);
+	// 滑块 固定圆形 直径 = kSliderThumbDia. 默认 XCGUI 给的尺寸跳跳, 手动锁为正方形.
+	XSliderBar_SetButtonWidth (m_hSliderProgress, kSliderThumbDia);
+	XSliderBar_SetButtonHeight(m_hSliderProgress, kSliderThumbDia);
 	XEle_EnableBkTransparent(m_hSliderProgress, TRUE);
 	// XCGUI 的 slider: 单纯 EnableDrawBorder(FALSE) 不够, 还得 EnableDrawFocus(FALSE)
 	// 才能完全去掉默认的 "焦点虚线框" (XCGUI 的一个小怪异行为, 但既然 API 在就调).
@@ -2559,8 +2603,19 @@ void CXVideo::CreateControlBar(){
 	XEle_EnableDrawFocus (m_hSliderProgress, FALSE);
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hSliderProgress, layout_size_weight, 1);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hSliderProgress, layout_size_fixed, kSliderH);
+	// 视觉补偿: 按钮 SVG 居中在 36px 框里自带留白, 而 slider 轨道画到客户区两端 ->
+	// 看上去 slider 与 邻居 比 按钮-按钮 间隙小. 加 10px 外边距把 slider 缩进, 视觉统一.
+	XWidget_LayoutItem_SetMargin((HXCGUI)m_hSliderProgress, 10, 0, 10, 0);
 	XEle_RegEventCPP1(m_hSliderProgress, XE_SLIDERBAR_CHANGE,
 	                  &CXVideo::OnSliderProgressChange);
+	// XE_PAINT: 接管轨道绘制; 滑块 走 m_hSliderProgress 的 button 子元素的 paint.
+	XEle_RegEventCPP1(m_hSliderProgress, XE_PAINT, &CXVideo::OnPaintSlider);
+	if (HELE hThumb = XSliderBar_GetButton(m_hSliderProgress)){
+		XEle_EnableBkTransparent(hThumb, TRUE);
+		XEle_EnableDrawBorder   (hThumb, FALSE);
+		XEle_EnableDrawFocus    (hThumb, FALSE);
+		XEle_RegEventCPP1(hThumb, XE_PAINT, &CXVideo::OnPaintSliderThumb);
+	}
 
 	// Time 标签 (CXShapeText, auto-size 跟文字宽). shape 没 EnableBkTransparent -
 	// 它本身就是绘图形状, 不带背景. ARGB 颜色: alpha 必须 255.
@@ -2577,6 +2632,7 @@ void CXVideo::CreateControlBar(){
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnVolume, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnVolume, layout_size_fixed, kBtnH);
 	XEle_RegEventCPP1(m_hBtnVolume, XE_BNCLICK, &CXVideo::OnBtnVolumeClick);
+	XEle_RegEventCPP1(m_hBtnVolume, XE_PAINT, &CXVideo::OnPaintBtnVolume);
 
 	// 触发一次 reflow, 让子控件立即就位 (后续窗口缩放 XE_ADJUSTLAYOUT 自动再算).
 	XEle_AdjustLayout(m_hEle);
@@ -2590,6 +2646,9 @@ void CXVideo::CreateControlBar(){
 	HookMouseActivity(m_hSliderProgress);
 	HookMouseActivity(m_hBtnVolume);
 	// 时间标签 m_hLblTime 是 HXCGUI shape 不是 HELE; shape 不接收鼠标事件, 跳过.
+
+	// SVG 图标 及时加载 (幂等, 安全). 需要在首次 paint 前准备好, 否则首帧画个空.
+	EnsureSvgsLoaded();
 
 	// 音量面板 + slider 提前建好 (初始隐藏), 避免 "首次点 vol" 才能拿句柄.
 	// 这样用户在 Create() 后就能 GetVolumePanel/GetSliderVolume + 改颜色/添额外事件.
@@ -2815,16 +2874,22 @@ void CXVideo::CreateVolumePanel(){
 	XLayoutBox_EnableHorizon(m_hVolPanel, FALSE);
 	XLayoutBox_SetAlignH(m_hVolPanel, layout_align_center);
 	XEle_SetPadding(m_hVolPanel, 8, 8, 8, 8);
-	// 面板背景: 复用控件栏背景色, 视觉一致.
-	XEle_EnableBkTransparent(m_hVolPanel, FALSE);
-	XEle_AddBkFill(m_hVolPanel, element_state_flag_focus_no, m_ctrlBarBg);
-	XEle_EnableDrawBorder(m_hVolPanel, FALSE);
+	// 用户 spec: 面板背景完全透明 + 鼠标穿透. 最终 "只看到滑动条".
+	// 鼠标穿透 后: slider 区外的点击 透到 m_hEle (视频区),
+	// OnLButtonUpVideo 看到面板可见 会优先 HidePanel - 点另外区关面板, 符合直觉.
+	XEle_EnableBkTransparent(m_hVolPanel, TRUE);
+	XEle_EnableDrawBorder   (m_hVolPanel, FALSE);
+	XEle_EnableDrawFocus    (m_hVolPanel, FALSE);
+	XEle_EnableMouseThrough (m_hVolPanel, TRUE);
 
 	// 嵌套 vertical slider. SliderBar 0=底, max=顶 (XCGUI 默认从下到上, 跟音量直觉一致).
 	m_hSliderVolume = XSliderBar_Create(0, 0, 20, kVolPopupH - 16, (HXCGUI)m_hVolPanel);
 	if (m_hSliderVolume){
 		XSliderBar_EnableHorizon(m_hSliderVolume, FALSE);
 		XSliderBar_SetRange(m_hSliderVolume, kVolumeRange);
+		// 滑块 同水平 slider 一致 固定正方形.
+		XSliderBar_SetButtonWidth (m_hSliderVolume, kSliderThumbDia);
+		XSliderBar_SetButtonHeight(m_hSliderVolume, kSliderThumbDia);
 		XEle_EnableBkTransparent(m_hSliderVolume, TRUE);
 		// 跟进度 slider 一样, 去边框 + 去焦点虚线.
 		XEle_EnableDrawBorder(m_hSliderVolume, FALSE);
@@ -2836,9 +2901,16 @@ void CXVideo::CreateVolumePanel(){
 		XSliderBar_SetPos(m_hSliderVolume, volPos);
 		XEle_RegEventCPP1(m_hSliderVolume, XE_SLIDERBAR_CHANGE,
 		                  &CXVideo::OnSliderVolumeChange);
+		// XE_PAINT: 轨道 + 滑块 两套 跟进度 slider 同样逻辑 (函数内部 随 client rect 横/纵自适).
+		XEle_RegEventCPP1(m_hSliderVolume, XE_PAINT, &CXVideo::OnPaintSlider);
+		if (HELE hThumb = XSliderBar_GetButton(m_hSliderVolume)){
+			XEle_EnableBkTransparent(hThumb, TRUE);
+			XEle_EnableDrawBorder   (hThumb, FALSE);
+			XEle_EnableDrawFocus    (hThumb, FALSE);
+			XEle_RegEventCPP1(hThumb, XE_PAINT, &CXVideo::OnPaintSliderThumb);
+		}
 	}
-	// 自动隐藏: 面板 + 内部 slider 都挂 MouseMove, 用户调音量时算"活动".
-	HookMouseActivity(m_hVolPanel);
+	// 自动隐藏: 面板 鼠标穿透 拿不到 mousemove, 不用挂; 但内部 slider 仍需要 用户拖动时算 "活动".
 	HookMouseActivity(m_hSliderVolume);
 	// 面板初始隐藏, 等 ToggleVolumePanel 控着 show/hide.
 	XWidget_Show((HXCGUI)m_hVolPanel, FALSE);
@@ -2889,5 +2961,159 @@ int CXVideo::OnSliderVolumeChange(HELE /*hEle*/, int pos, BOOL* /*pbHandled*/){
 	if (v < 0.0f) v = 0.0f;
 	if (v > 1.0f) v = 1.0f;
 	SetVolume(v);
+	// 重绘 音量按钮: v 跨 0 边界时 voice.svg <-> voice_mute.svg 需切换.
+	// SetVolume 内部已在跨界时 redraw 了, 这里是 用户 spec 要求 补上的 (作 事件处理末尾 多一道保险).
+	if (m_hBtnVolume) XEle_Redraw(m_hBtnVolume, FALSE);
+	return 0;
+}
+
+//============================================================================
+// SVG 图标 资源管理
+// 6 个图标 (play / suspend / loop / loop_close / voice / voice_mute) 全部硬编
+// 码在 module_xcgui_video_svgs.inc, 通过 XSvg_LoadStringUtf8 一次性建好.
+// XSvg 在 XCGUI 内部是引用计数的; 我们持有的句柄要在 OnDestroyImpl 里 XSvg_Destroy.
+// 调用方不应在 XCGUI 卸载后调 XSvg_Destroy - 那时句柄表已销毁, 会弹无效句柄错框.
+//============================================================================
+
+void CXVideo::EnsureSvgsLoaded(){
+	// 幂等: 已加载就跳过. 各句柄独立判断, 避免某次 LoadStringUtf8 失败后续永远跳过.
+	if (!m_hSvgPlay)      m_hSvgPlay      = XSvg_LoadStringUtf8(kSvgPlay);
+	if (!m_hSvgSuspend)   m_hSvgSuspend   = XSvg_LoadStringUtf8(kSvgSuspend);
+	if (!m_hSvgLoop)      m_hSvgLoop      = XSvg_LoadStringUtf8(kSvgLoop);
+	if (!m_hSvgLoopClose) m_hSvgLoopClose = XSvg_LoadStringUtf8(kSvgLoopClose);
+	if (!m_hSvgVoice)     m_hSvgVoice     = XSvg_LoadStringUtf8(kSvgVoice);
+	if (!m_hSvgVoiceMute) m_hSvgVoiceMute = XSvg_LoadStringUtf8(kSvgVoiceMute);
+}
+
+void CXVideo::DestroySvgs(){
+	// 顺序释放. XSvg_Destroy 容许 NULL? 保守起见自己 if 守.
+	if (m_hSvgPlay)     { XSvg_Destroy(m_hSvgPlay);      m_hSvgPlay      = NULL; }
+	if (m_hSvgSuspend)  { XSvg_Destroy(m_hSvgSuspend);   m_hSvgSuspend   = NULL; }
+	if (m_hSvgLoop)     { XSvg_Destroy(m_hSvgLoop);      m_hSvgLoop      = NULL; }
+	if (m_hSvgLoopClose){ XSvg_Destroy(m_hSvgLoopClose); m_hSvgLoopClose = NULL; }
+	if (m_hSvgVoice)    { XSvg_Destroy(m_hSvgVoice);     m_hSvgVoice     = NULL; }
+	if (m_hSvgVoiceMute){ XSvg_Destroy(m_hSvgVoiceMute); m_hSvgVoiceMute = NULL; }
+}
+
+//============================================================================
+// 控件栏 自绘 (XE_PAINT)
+//
+// 三个按钮 + 两个 slider (轨道 + 滑块) 各自接管绘制. pbHandled=TRUE 跳过 XCGUI
+// 默认背景/边框/焦点框 + 文字, 完全由我们画.
+//
+// 内部用 lambda DrawSvgCentered 复用 "中心画 SVG" 逻辑, 跟用户 spec 公式一致:
+//   x = rc.right/2 - w/2, y = rc.bottom/2 - h/2
+// (XEle_GetClientRect 返 rc 起点 (0,0), 所以这等价于 (rc.right-rc.left-w)/2 + rc.left).
+//============================================================================
+
+namespace {
+// 中心绘制 helper: 加载尺寸 -> 算居中坐标 -> XDraw_DrawSvg.
+inline void DrawSvgCentered(HDRAW hDraw, HSVG hSvg, const RECT& rc){
+	if (!hDraw || !hSvg) return;
+	int sw = 0, sh = 0;
+	XSvg_GetSize(hSvg, &sw, &sh);
+	// 容错: 若 SVG 解析失败 GetSize 给 0, 直接放弃画.
+	if (sw <= 0 || sh <= 0) return;
+	// 用户 spec 公式. 假设 rc.left/top == 0 (XEle_GetClientRect 通常如此).
+	int x = rc.right  / 2 - sw / 2;
+	int y = rc.bottom / 2 - sh / 2;
+	XDraw_DrawSvg(hDraw, hSvg, x, y);
+}
+} // namespace
+
+int CXVideo::OnPaintBtnPlay(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
+	// pbHandled=TRUE: 跳过 XCGUI 默认 (背景 / 边框 / 文本); 完全自绘.
+	if (pbHandled) *pbHandled = TRUE;
+	EnsureSvgsLoaded();
+	int s = m_state.load(std::memory_order_acquire);
+	// 在播 -> 显示 暂停 图标 (按下就暂停); 否则显示 播放 图标.
+	HSVG hSvg = (s == xvideo_state_playing) ? m_hSvgSuspend : m_hSvgPlay;
+	RECT rc{};  XEle_GetClientRect(hEle, &rc);
+	DrawSvgCentered(hDraw, hSvg, rc);
+	return 0;
+}
+
+int CXVideo::OnPaintBtnLoop(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
+	if (pbHandled) *pbHandled = TRUE;
+	EnsureSvgsLoaded();
+	BOOL on = m_loop.load(std::memory_order_acquire) ? TRUE : FALSE;
+	HSVG hSvg = on ? m_hSvgLoop : m_hSvgLoopClose;
+	RECT rc{};  XEle_GetClientRect(hEle, &rc);
+	DrawSvgCentered(hDraw, hSvg, rc);
+	return 0;
+}
+
+int CXVideo::OnPaintBtnVolume(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
+	if (pbHandled) *pbHandled = TRUE;
+	EnsureSvgsLoaded();
+	// 静音判定: 显式 mute 或 音量降到 0 都视为静音.
+	BOOL muted = (m_muted || m_volume <= 0.0f) ? TRUE : FALSE;
+	HSVG hSvg = muted ? m_hSvgVoiceMute : m_hSvgVoice;
+	RECT rc{};  XEle_GetClientRect(hEle, &rc);
+	DrawSvgCentered(hDraw, hSvg, rc);
+	return 0;
+}
+
+int CXVideo::OnPaintSlider(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
+	// 接管: 不要 XCGUI 默认 track 图. 我们画 35% 白底 + #0099FF 填充.
+	if (pbHandled) *pbHandled = TRUE;
+	RECT rc{};  XEle_GetClientRect(hEle, &rc);
+	int w = rc.right - rc.left;
+	int h = rc.bottom - rc.top;
+	if (w <= 0 || h <= 0) return 0;
+
+	int pos   = XSliderBar_GetPos  (hEle);
+	int range = XSliderBar_GetRange(hEle);
+	if (range <= 0) return 0;
+	float frac = (float)pos / (float)range;
+	if (frac < 0.0f) frac = 0.0f;
+	if (frac > 1.0f) frac = 1.0f;
+
+	// 方向: 宽 >= 高 走水平, 否则垂直. 跟 XSliderBar_EnableHorizon 实际值一致.
+	bool horizontal = (w >= h);
+	const int  thk = kSliderTrackThk;
+	const float radius = thk * 0.5f;  // pill 圆角 = 厚度一半 -> 完美胶囊形
+
+	if (horizontal){
+		// 轨道在 垂直中央, 高 thk, 跨 整宽. 圆角 = thk/2 -> 两端半圆.
+		int trackY = rc.top + (h - thk) / 2;
+		RECTF rcTrackF = { (float)rc.left, (float)trackY,
+		                   (float)rc.right, (float)(trackY + thk) };
+		XDraw_SetBrushColor(hDraw, kSliderTrackBg);
+		XDraw_FillRoundRectF(hDraw, &rcTrackF, radius, radius);
+		// 填充段: 左 -> 当前 pos. frac=0 时 fillW=0, 直接跳过避免 0 宽 round rect.
+		int fillW = (int)((float)w * frac + 0.5f);
+		if (fillW > 0){
+			RECTF rcFillF = { (float)rc.left, (float)trackY,
+			                  (float)(rc.left + fillW), (float)(trackY + thk) };
+			XDraw_SetBrushColor(hDraw, kSliderTrackFill);
+			XDraw_FillRoundRectF(hDraw, &rcFillF, radius, radius);
+		}
+	} else {
+		// 垂直: 轨道在 水平中央, 宽 thk, 跨 整高. fill 从 *底* 向上 (XSliderBar 0=底).
+		int trackX = rc.left + (w - thk) / 2;
+		RECTF rcTrackF = { (float)trackX,         (float)rc.top,
+		                   (float)(trackX + thk), (float)rc.bottom };
+		XDraw_SetBrushColor(hDraw, kSliderTrackBg);
+		XDraw_FillRoundRectF(hDraw, &rcTrackF, radius, radius);
+		int fillH = (int)((float)h * frac + 0.5f);
+		if (fillH > 0){
+			RECTF rcFillF = { (float)trackX,         (float)(rc.bottom - fillH),
+			                  (float)(trackX + thk), (float)rc.bottom };
+			XDraw_SetBrushColor(hDraw, kSliderTrackFill);
+			XDraw_FillRoundRectF(hDraw, &rcFillF, radius, radius);
+		}
+	}
+	return 0;
+}
+
+int CXVideo::OnPaintSliderThumb(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
+	// 滑块 #F7F7F7 实心圆. 用户 spec 提到 XDraw_DrawArcF, 但那是只画弧线轮廓 -
+	// 截图视觉是实心圆, 这里用 XDraw_FillEllipse 才匹配. 先 SetBrushColor 再 fill.
+	if (pbHandled) *pbHandled = TRUE;
+	RECT rc{};  XEle_GetClientRect(hEle, &rc);
+	if (rc.right <= rc.left || rc.bottom <= rc.top) return 0;
+	XDraw_SetBrushColor(hDraw, kSliderThumb);
+	XDraw_FillEllipse(hDraw, &rc);
 	return 0;
 }
