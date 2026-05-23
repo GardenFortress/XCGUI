@@ -1,4 +1,4 @@
-# XCGUI 模块扩展库
+﻿# XCGUI 模块扩展库
 
 [炫彩界面库 (XCGUI)](https://www.xcgui.com) 的扩展模块集合. D2D 主路径 + GDI/GDI+ 兜底, 兼容 Windows 7 SP1+.
 
@@ -19,7 +19,7 @@
 
 | 系统 | editdw / image | video | blur | shadow | uitool |
 |---|---|---|---|---|---|
-| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **ACCENT_ACRYLIC** | D2D + GDI+ DIB | D2D |
+| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **DComp+WUC** (`AttachToWndEx`) / `ACCENT_ACRYLIC` | D2D + GDI+ DIB | D2D |
 | Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB | D2D |
 | Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB | D2D |
 | Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB | D2D |
@@ -83,6 +83,8 @@ pImg->LoadFromFile(L"D:\\test.avif");
 
 ### `CXBlur`
 
+**老路径 (ACCENT_ACRYLIC / BLURBEHIND, 全 Win10/11)**
+
 ```cpp
 CXBlur* pBlur = new CXBlur();
 pBlur->AttachToWnd(hWnd);
@@ -91,6 +93,29 @@ pBlur->SetCornerRadiusEx(16, 16, 0, 0);   // per-corner: 左上 / 右上 / 右�
 // 可选: 强制启用系统透明效果 (会写 HKCU 注册表, 详见下文)
 // CXBlur::ForceSystemTransparencyOn(TRUE);
 ```
+
+**DComp+WUC 真亚克力路径 (Win10 1803+, 视觉对齐 Win11 Start Menu)**
+
+```cpp
+// 需要 module_xcgui_blur_dcomp.h / .cpp 一起编译
+CXBlur* pBlur = new CXBlur();
+// 可选: 预设主题/参数 (不设则走内置 PoC 默认)
+pBlur->SetTheme(xblur_theme_auto);         // auto / light / dark
+// pBlur->SetTintColor(RGBA(247,248,249,255));  // 浅色 tint
+// pBlur->SetBlurOpacity(0.35f);               // 通透感 0..1
+// pBlur->SetNoise(0.01f);                     // 噪点强度 0..1
+pBlur->AttachToWndEx(hWnd);               // 自动选 dcomp 路径; 不支持时退回 AttachToWnd
+
+// 原生阴影 + 圆角 (Win11 DWM 系统级, 不占客户区)
+CXBlur::EnableNativeShadow(hWnd, TRUE);
+CXBlur::EnableNativeRoundedCorner(hWnd, xblur_corner_round);
+// 可选: 禁 Snap / 禁最大化
+// CXBlur::EnableSnap(hWnd, FALSE);
+// CXBlur::EnableMaximize(hWnd, FALSE);
+```
+
+> `AttachToWndEx` 内部文件: `module_xcgui_blur_dcomp.h` / `module_xcgui_blur_dcomp.cpp`
+> 需与 `module_xcgui_blur.h/.cpp` 一起加入工程.
 
 ### `CXShadow`
 

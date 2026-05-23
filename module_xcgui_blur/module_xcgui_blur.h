@@ -1,8 +1,8 @@
 ﻿#ifndef  XCGUI_BLUR_H
 #define  XCGUI_BLUR_H
 //@模块名称  炫彩界面库-亚克力高斯模糊
-//@版本  3.0.0
-//@日期  2026-05-15
+//@版本  3.1.1
+//@日期  2026-05-22
 //@作者  未闻花名
 //@QQ    936599025
 //@依赖  module_xcgui_class.h
@@ -10,16 +10,33 @@
 //          element 用 alpha 控制透出 backdrop blur), 跟手, 0 帧延迟, 无抓帧.
 //
 //          路线选择 (运行时按 OS build number 显式选, 无需调用方关心):
-//            1) Win11 (build >= 22000)         : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
-//            2) Win10 1803~1809 (17134~17763)  : ACCENT_ENABLE_ACRYLICBLURBEHIND (真 acrylic)
-//            3) Win10 1903~22H2 (18362~21999)  : ACCENT_ENABLE_BLURBEHIND        (绕开 ACRYLIC 阉割)
+//            1) Win11 22000+ / Win10 1803~1809 (17134~17763)
+//               → ACCENT_ENABLE_ACRYLICBLURBEHIND.
+//                 把用户 tintColor 透传给 DWM 的 GradientColor, DWM 端做完整
+//                 acrylic 合成 (blur + tint). element 端只 COPY clear alpha
+//                 让 DWM 透出, 不再涂 tint (避免双层 tint 把 blur 盖死成灰).
+//                 视觉接近但 *不完全等于* Win11 Start Menu — 走的是 Win10 RS4
+//                 老配方, 缺 LuminosityBlend, 比 Start Menu 略偏纯色, 但有真 blur.
+//            2) Win10 1903~22H2 (18362~21999)
+//               → ACCENT_ENABLE_BLURBEHIND.
 //                 微软在 1903 起把 ACRYLIC 的 blur kernel 关掉了, 仍返 TRUE 但
 //                 只剩透明+tint 且 resize 卡顿. 走 BLURBEHIND 取 Win10 风格
-//                 mild blur (无 tint) 是该段唯一可用方案.
-//            4) Win10 1607~1709 (14393~16299)  : ACCENT_ENABLE_BLURBEHIND        (Win10 风 blur)
-//            5) Win7 / Win8 / 8.1 / Vista       : 退化为"仅装饰" (tint+border+圆角).
+//                 mild blur (无 tint) 是该段唯一可用方案. element 端 COPY 涂 tint.
+//            3) Win10 1607~1709 (14393~16299) → ACCENT_ENABLE_BLURBEHIND.
+//            4) Win7 / Win8 / 8.1 / Vista       : 退化为"仅装饰" (tint+border+圆角).
 //                 XCGUI 渲染管线不保留 per-pixel alpha, Win7 Aero BLURREGION 在
 //                 实际场景下不会出 blur, 故跟 Win8/8.1 一档处理.
+//
+//          *为什么不用 Win11 22H2+ 官方 DWMWA_SYSTEMBACKDROP_TYPE 真亚克力 API*:
+//          实测该 API 对 XCGUI 这种带 redirection bitmap 的 GDI/D2D 窗 *静默
+//          fallback 到纯色不跑 acrylic 合成* (4 个 HRESULT 全 S_OK 但视觉死灰).
+//          DWMSBT 只服务于走 DComp visual tree 的 WS_EX_NOREDIRECTIONBITMAP 窗
+//          (WinUI3 / 现代 UWP). XCGUI 走 GDI 渲染管线, 改架构成本巨大且会
+//          破坏现有用户代码. 故所有 Win11 段都 fallback 到 ACCENT_ACRYLIC.
+//
+//          *为什么要分这么多档*: 微软在 1903 阉割 ACRYLIC, 只走单一路径会在
+//          某些 OS 上完全瞎掉. 三档分流让 visual 在 OS 区间内尽量贴近 Win11
+//          同款 acrylic.
 //
 //          重要权衡 (主动声明给调用者):
 //            * 受 Windows 个性化 - 颜色 - 透明效果 开关影响. 用户关闭时
@@ -77,9 +94,10 @@
 #include "module_xcgui_class.h"
 
 //@src "module_xcgui_blur.cpp"
+//@src "module_xcgui_blur_dcomp.cpp"
 
 // =================================================================
-// 第三方依赖: GDI / GDI+ / D2D / User32 / DWM.
+// 第三方依赖: GDI / GDI+ / D2D / User32 / DWM, 以及 dcomp 路径用的 D3D11/DXGI/WinRT.
 // =================================================================
 
 //@lib "Gdiplus.lib"
@@ -88,6 +106,11 @@
 //@lib "D2d1.lib"
 //@lib "Dxguid.lib"
 //@lib "Dwmapi.lib"
+//@lib "D3d11.lib"
+//@lib "Dxgi.lib"
+//@lib "DComp.lib"
+//@lib "WindowsApp.lib"
+//@lib "CoreMessaging.lib"
 
 #pragma comment(lib, "Gdiplus.lib")
 #pragma comment(lib, "Gdi32.lib")
@@ -95,6 +118,11 @@
 #pragma comment(lib, "D2d1.lib")
 #pragma comment(lib, "Dxguid.lib")
 #pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "D3d11.lib")
+#pragma comment(lib, "Dxgi.lib")
+#pragma comment(lib, "DComp.lib")
+#pragma comment(lib, "WindowsApp.lib")
+#pragma comment(lib, "CoreMessaging.lib")
 
 //@别名 取系统版本()
 static inline int GetCurrentVersion() {
@@ -141,6 +169,18 @@ enum xblur_theme_
 	xblur_theme_dark      = 2,
 	//@别名 模糊主题_跟随系统
 	xblur_theme_auto      = 3,
+};
+
+///AttachToWndEx 路径选择. auto = dcomp > dwm 自动按 OS / 能力降级.
+//@别名 模糊路径
+enum xblur_path_
+{
+	//@别名 模糊路径_自动
+	xblur_path_auto    = 0,
+	//@别名 模糊路径_DCOMP合成
+	xblur_path_dcomp   = 1,
+	//@别名 模糊路径_DWM亚克力
+	xblur_path_dwm     = 2,
 };
 
 ///DWM 原生圆角预设 (CXBlur::EnableNativeRoundedCorner 参数).
@@ -229,6 +269,23 @@ public:
 //@别名  附加窗口()
 	BOOL AttachToWnd(HWINDOW hWnd);
 
+//@备注 一键挂载 dcomp acrylic 主导架构 (acrylic owner 子窗承载模糊, XCGUI 透明 owned 上层).
+//      内部完整封装 PoC 流程: 进 layered 透明 → 创建 NOREDIRECTIONBITMAP acrylic 子窗 →
+//      Apply effect chain → owner-owned + WS_EX_APPWINDOW → 装两 subclass 同步 →
+//      Show acrylic + 系统圆角. 调用方仅一行调用即可拿到 Win11 Start Menu 同款 acrylic.
+//
+//      参数预设按当前 SetTheme/SetTintColor/SetNoise/SetUniformBrightness/SetBlurOpacity
+//      的值用 (没显式 set 走主题默认: light=243,243,243 / blurOpacity=0.5 / sat=1.3 /
+//      noise=1% ; dark=32,32,32 / blurOpacity=0.15 / sat=1.2 / noise=3% , uniformBright=TRUE).
+//      要先 SetTintColor 等再调本接口, 否则用主题默认.
+//
+//      销毁: XCGUI 主窗销毁时自动清理 acrylic + dcomp 资源, 调用方不需手工.
+//@参数 hWnd 目标 XCGUI 主窗.
+//@参数 path xblur_path_auto / dcomp / dwm. auto 默认 = dcomp > dwm 按 OS 降级.
+//@返回 TRUE 成功, FALSE 句柄非法 / 路径不支持.
+//@别名  附加窗口扩展()
+	BOOL AttachToWndEx(HWINDOW hWnd, int path = xblur_path_auto);
+
 //@备注 解除当前绑定. 还原元素的 EnableBkTransparent 状态.
 //      *不会* 主动关闭窗口的 DWM acrylic, 因为同一窗口可能有多个 CXBlur 共享, 也可能
 //      用户希望 CXBlur 销毁后窗口仍保持 acrylic 视觉. 用户需要彻底关 acrylic
@@ -280,6 +337,42 @@ public:
 	void SetNoise(float amount);
 //@别名  取噪点()
 	float GetNoise() const;
+
+//@备注 启用 / 关闭"亮度锁定" (LuminosityBlend). 仅 *dcomp 路径* (Win10 1803+ 走
+//      Windows.UI.Composition 直接合成时) 生效, 老路径 (ACCENT / DWM) 调用本接口
+//      被静默忽略.
+//
+//      启用时 (默认 TRUE): 不论桌面背景深浅, 窗口都保持 tint 自身亮度,
+//        只透出色相变化. 这是 Win11 Start Menu / Settings 标准观感.
+//      关闭时 (FALSE): blur 亮度跟桌面同步起伏 (Win10 Aero / 老 acrylic 风),
+//        视觉更"通透"但深背景下窗会变暗.
+//
+//      改值后立即重建 effect chain (跟 SetTintColor 一样需要 reapply).
+//@参数 bEnable TRUE 锁亮度 (默认), FALSE 跟桌面起伏
+//@别名  置亮度锁定()
+	void SetUniformBrightness(BOOL bEnable);
+//@别名  取亮度锁定()
+	BOOL GetUniformBrightness() const;
+
+//@备注 设置"模糊层通透感" — 控制 blur 通道相对 tint 的显示比例.
+//      *仅 dcomp 路径生效* (Win10 1803+ 走 Windows.UI.Composition 自合成路径时).
+//      老路径 (ACCENT_ACRYLIC / DWM_TRANSIENT / BLURBEHIND / DECORATIVE) 上调用
+//      被静默忽略 (那些路径用 SetTintColor 的 alpha 控制等价行为).
+//
+//      取值范围 0.0 ~ 1.0:
+//        0.0  完全不通透 — 仅 tint 颜色, 看不到背景 blur
+//        0.15 PoC dark 默认 — tint 主导 85%, 背景隐约透出 15% (Win11 Start Menu 深色)
+//        0.5  PoC light 默认 — tint / blur 各半 (Win11 Start Menu 浅色)
+//        1.0  完全通透 — 仅 blur, 看不到 tint (有点像玻璃)
+//
+//      传 *负值* (例如 -1) → 还原为"按主题默认 + tintA 反算" (默认状态).
+//
+//      改值后立即重建 effect chain (跟 SetTintColor 一样需要 reapply).
+//@参数 fOpacity blur 可见度 0.0~1.0; 负数 = 还原默认
+//@别名  置模糊通透度()
+	void SetBlurOpacity(float fOpacity);
+//@别名  取模糊通透度()
+	float GetBlurOpacity() const;
 
 //@备注 当前运行环境是否支持系统级 acrylic / blur (Vista+ 任意一档即视为支持).
 //      不支持时 (Win8/8.1) CXBlur 仅画 tint+border+圆角.
@@ -501,12 +594,25 @@ private:
 	HWINDOW m_attachedWnd       = NULL;
 	bool   m_savedBkTransparent  = false;
 	bool   m_hasSavedTransparent = false;
+	// AttachToWnd 临时改了宿主窗的 layout / overlayBorder, Detach 时还原.
+	// 仅 attachToWindow 路径用; AttachToEle 路径不动这俩.
+	bool   m_savedWndLayout      = TRUE;   // 原 XWnd_IsEnableLayout
+	bool   m_savedWndOverlayBorder = FALSE; // 原 overlay border 状态 (XCGUI 无 getter, 假设默认 FALSE)
+	bool   m_hasSavedWndLayout   = false;
 	float  m_dpiScale           = 1.0f;
 
 	// ===== 模糊参数 (DWM 路径只控装饰层) =====
 	std::atomic<COLORREF> m_tintColor    {0};
 	std::atomic<int>      m_theme        {xblur_theme_custom};
 	std::atomic<float>    m_noise        {0.06f};
+	// 仅 dcomp 路径生效: 是否锁亮度 (LuminosityBlend). TRUE=Win11 Start Menu 风,
+	// 不论桌面深浅窗口稳定 tint 亮度; FALSE=Win10 Aero 风, 亮度跟桌面起伏.
+	std::atomic<int>      m_uniformBrightness {1};   // BOOL 用 atomic<int> 避免对齐坑
+	// 仅 dcomp 路径生效: blur 通道可见度 ("通透感"). 0..1.
+	//   -1 = "未设, 按主题默认" (light=0.5, dark=0.15) 或按 tintA 反算
+	//   0..1 = 用户显式覆盖
+	// 用 atomic<int> 存 1000 倍整数 (毫单位) 避免 atomic<float> 对齐麻烦.
+	std::atomic<int>      m_blurOpacityMilli {-1};   // -1 = unset
 	// 四角圆角半径: TL / TR / BR / BL (顺时针). 四值相等时走快路径
 	// FillRoundedRectangle, 否则用 path geometry 拼 4 段弧.
 	std::atomic<int>      m_cornerTL     {0};
@@ -519,6 +625,9 @@ private:
 	// ===== host acrylic 状态 =====
 	bool  m_acrylicApplied = false;   // host acrylic 是否成功启用
 	HWND  m_hostHwnd       = NULL;    // host HWND (acrylic 生效的窗口)
+	// AttachToWndEx 绑定标志 — 走 dcomp acrylic owner 子窗路径. 跟老 ACCENT/element
+	// 路径互斥. 用于 Setter 决定走哪个 reapply 路径.
+	bool  m_attachedExDcomp = false;
 
 public:
 	// =================================================================
@@ -553,6 +662,9 @@ private:
 
 	void ApplyThemePreset(int theme);
 	static BOOL  IsSystemDarkMode();
+
+	// AttachToWndEx 路径下 Setter 改了参数后重刷 dcomp effect chain.
+	void ReapplyExEffects();
 	//@隐藏}
 };
 //@分组}
