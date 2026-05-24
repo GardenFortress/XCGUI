@@ -767,6 +767,15 @@ BOOL CXEditDW::IsAutoWrap() const{
 	return m_wrap ? TRUE : FALSE;
 }
 
+void CXEditDW::RelayoutNow(){
+	// SetRect / SetBorderSize / EnableAutoWrap 等改尺寸/换行的接口只 InvalidateLayout +
+	// RedrawSelf, 真正重建分段 layout 在下一帧 OnPaintImpl 触发的 EnsureLayout 里. 调用
+	// 方若紧接着用 XSView_GetTotalSize 读内容尺寸 (例如聊天气泡按内容收缩), 还拿不到
+	// 新数据. 本接口同步调一次 EnsureLayout, 末尾会 RecomputeParaYOffsets +
+	// XSView_SetTotalSize, 调用后立即可读到最新 totalSize.
+	EnsureLayout();
+}
+
 void CXEditDW::EnableReadOnly(BOOL bEnable){
 	m_readOnly = bEnable ? true : false;
 }
