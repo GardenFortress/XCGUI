@@ -515,6 +515,12 @@ public:
 //@别名  是否自动换行()
 	BOOL IsAutoWrap() const;
 
+//@备注 强制立刻同步重建内部布局. 通常 SetRect / SetBorderSize 等改尺寸的接口只把布局
+//标脏, 等下一帧 OnPaint 触发 EnsureLayout. 调用本接口后可立即通过 XSView_GetTotalSize
+//读到最新内容尺寸, 用于自适应排版 (如气泡按内容高度收缩).
+//@别名  强制刷新布局()
+	void RelayoutNow();
+
 //@备注 启用 / 关闭只读 (只读时禁止编辑、剪切、粘贴、撤销).
 //@参数 bEnable 是否启用
 //@别名  启用只读()

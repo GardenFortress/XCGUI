@@ -3251,7 +3251,10 @@ int CXEditDW::OnSizeImpl(HELE /*hEle*/, int /*nFlags*/, UINT /*nAdjustNo*/, BOOL
 	// 只在 *视口宽真变化* 时才 Invalidate (maxW 影响段内换行); 仅高度变化 / 只滚动条变化
 	// 时段 layout 仍然有效, 跳过 Invalidate, 让 EnsureLayout 末尾的 RecomputeParaYOffsets
 	// + XSView_SetTotalSize 即可 (这条路径成本 O(段数), 通常 ~ms 级).
-	float curContentW = (float)XSView_GetViewWidth(m_hEle) * m_dpiScale;
+	// 与 EnsureLayout / EnsureParagraphLayout 走同一 GetContentWidth, 包含兜底.
+	// 否则当 XSView_GetViewWidth 返回异常小值时 OnSize 计算的 curContentW 与 EnsureLayout
+	// 缓存的 m_lastContentW 不一致, widthChanged 误判, 后续 size 变化无法触发 InvalidateLayout.
+	float curContentW = GetContentWidth();
 	if (curContentW < 1.0f) curContentW = 1.0f;
 	// 阈值 0.5px: 同一 DPI 下 contentW 应当是整数, 浮点比较容差.
 	bool widthChanged = (m_lastContentW < 1.0f) || (fabsf(curContentW - m_lastContentW) > 0.5f);
@@ -3392,7 +3395,22 @@ void CXEditDW::EnsureTextFormat(){
 //   1. 文本不会画到滚动条上面 (XSView 已扯除滚动条区);
 //   2. 文本可显区 与 SetBorderSize / 滚动条出现与否 同步.
 float CXEditDW::GetContentWidth(){
-	float w = (float)XSView_GetViewWidth(m_hEle) * m_dpiScale;
+	// 关键: 用 元素宽 - 左右边框 (不扣 V 滚动条占位) 作内容宽.
+	//
+	// 历史方案是 XSView_GetViewWidth(已扣可见滚动条占位), 但这在
+	// "多行 + autowrap" 路径下会触发死循环反馈:
+	//   1) 文本按 viewW 排版, totalHeight > viewH, V 滚动条出现
+	//   2) viewW 缩小约 17px, maxW 也跟着缩
+	//   3) 文本被迫换行更狠, totalHeight 更大, V 滚动条仍维持
+	//   4) 反馈到极端: 元素初始较窄 (例如 120px) 时直接每字符一行
+	// 用 元素宽-左右边框 做 maxW 不引入 viewW → totalH → viewW 的环, 排版稳定.
+	// 代价: V 滚动条可见时, 最右侧约 17px 文字可能被滚动条压住 (可接受的小瑕疵).
+	int eleW = XEle_GetWidth(m_hEle);
+	borderSize_ bs = { 0, 0, 0, 0 };
+	XEle_GetBorderSize(m_hEle, &bs);
+	int contentW = eleW - bs.leftSize - bs.rightSize;
+	if (contentW < 1) contentW = 1;
+	float w = (float)contentW * m_dpiScale;
 	if (w < 1.0f) w = 1.0f;
 	return w;
 }
