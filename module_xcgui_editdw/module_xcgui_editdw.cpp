@@ -650,6 +650,21 @@ float CXEditDW::GetFontSize() const{
 	return m_fontSize;
 }
 
+void CXEditDW::SetLineSpacing(float nPixels){
+	if (nPixels < 0.0f) nPixels = 0.0f;
+	if (m_lineSpacing == nPixels) return;
+	m_lineSpacing = nPixels;
+	// 行高改变需要重建段 layout (SetLineSpacing 是 IDWriteTextLayout 创建后立即设置, 改值
+	// 必须重建). m_pTextFormat 可保留, 行高不在 TextFormat 上.
+	ParaReleaseAllLayouts();
+	InvalidateLayout();
+	RedrawSelf();
+}
+
+float CXEditDW::GetLineSpacing() const{
+	return m_lineSpacing;
+}
+
 //===================================================================
 //  颜色
 //===================================================================
@@ -3043,6 +3058,23 @@ void CXEditDW::EnsureParagraphLayout(int paraIdx){
 	float maxH = 1000000.0f;
 	HRESULT hr = m_pDWFactory->CreateTextLayout(txt, len, m_pTextFormat, maxW, maxH, &p.pLayout);
 	if (FAILED(hr) || !p.pLayout) return;
+
+	// 用户配置统一行高 → 强制 UNIFORM, 取代默认按 font metrics 计算的 ascent+descent+leading.
+	// baseline 取 80% 行高作为字形基线 (DW 推荐起步点; 太小会让顶部贴边, 太大会撞下行).
+	// 行高乘 m_dpiScale 转物理像素, 与 layout 其他度量一致.
+	// 例外: 段内含 inline 对象 (U+FFFC, 图片 / UI 对象) 时, 这些对象的真实高度通常远大于
+	// 文本行高, UNIFORM 会把它们挤扁成文本行高 (用户截图: 插入图片整体塌陷成一行高).
+	// 这种段保持 DirectWrite DEFAULT 行高, 由 inline object 的 metrics 自动撑开行高.
+	if (m_lineSpacing > 0.0f){
+		bool hasInline = false;
+		for (UINT32 k = 0; k < len; ++k){
+			if (txt[k] == kObjectReplacementChar){ hasInline = true; break; }
+		}
+		if (!hasInline){
+			FLOAT lineH = m_lineSpacing * m_dpiScale;
+			p.pLayout->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, lineH, lineH * 0.8f);
+		}
+	}
 
 	// 单行模式按 m_textAlign 的水平位选 DWRITE alignment. 多行模式永远 LEADING (顶左).
 	if (!m_multiLine){

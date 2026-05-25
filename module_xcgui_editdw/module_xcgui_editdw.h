@@ -425,6 +425,17 @@ public:
 //@别名  取字号()
 	float GetFontSize() const;
 
+//@备注 置统一行高 (逻辑像素). 0 = DirectWrite 默认行高 (含 font leading); >0 走
+//DWRITE_LINE_SPACING_METHOD_UNIFORM, 每行恰好高 nPixels, baseline 取 80%. 用于做
+//"紧凑" 单/多行文本 (例如聊天气泡), 避免默认 line metric 把 leading 累加到行底.
+//@参数 nPixels 行高 (逻辑像素, 0 表示恢复默认行为)
+//@别名  置行间距()
+	void SetLineSpacing(float nPixels);
+
+//@返回 当前统一行高设置 (0=默认)
+//@别名  取行间距()
+	float GetLineSpacing() const;
+
 	// ===== 颜色 =====
 //@参数 color 颜色值, 请使用宏: RGBA()
 //@别名  置文本颜色()
@@ -675,6 +686,8 @@ private:
 	std::wstring m_hint;
 	std::wstring m_fontName = L"Segoe UI";
 	float m_fontSize = 14.0f;
+	// 0 = 默认 (DirectWrite 自己按 font metrics 决定每行高); >0 = 强制 UNIFORM 行高.
+	float m_lineSpacing = 0.0f;
 
 	int m_caret = 0;
 	int m_anchor = 0;
