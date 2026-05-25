@@ -253,6 +253,20 @@ public:
 //@别名  取箭头方向()
 	static xtooltip_arrow_side_ GetArrowSide(HELE hEle);
 
+//@备注 设置是否显示三角箭头. 默认 TRUE = 显示. 关闭后气泡仍按 ArrowSide 决定的
+//      方位出现, 仅不绘制三角且不为三角预留外侧空间.
+//@参数 hEle 元素句柄
+//@参数 bShow 是否显示三角
+//@返回 成功 TRUE
+//@别名  置显示箭头()
+	static BOOL SetShowArrow(HELE hEle, BOOL bShow);
+
+//@备注 取是否显示三角箭头.
+//@参数 hEle 元素句柄
+//@返回 显示 TRUE
+//@别名  取显示箭头()
+	static BOOL GetShowArrow(HELE hEle);
+
 	// ===== 主题 / 颜色 =====
 
 //@备注 设置主题. dark / light / custom / auto(跟随系统).
@@ -318,7 +332,7 @@ public:
 
 	// ===== 显示延迟 / 自动关闭 =====
 
-//@备注 设置鼠标停留多少毫秒后才显示气泡 (防止快速划过抖动). 默认 500ms.
+//@备注 设置鼠标停留多少毫秒后才显示气泡 (防止快速划过抖动). 默认 0 = 立即显示.
 //@参数 hEle 元素句柄
 //@参数 ms 延迟毫秒数 (>=0)
 //@返回 成功 TRUE

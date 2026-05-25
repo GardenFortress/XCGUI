@@ -71,7 +71,7 @@ constexpr UINT kTimerId_AutoClose   = 0x7102;   // 气泡 body 上, 自动关闭
 constexpr int  kFadeTickMs          = 16;       // 60Hz 动画刷新
 
 // 默认行为参数
-constexpr int  kDefaultShowDelayMs  = 500;
+constexpr int  kDefaultShowDelayMs  = 0;
 constexpr int  kDefaultAutoCloseMs  = 0;        // 0 = 不自动关闭
 constexpr int  kDefaultFadeMs       = 150;
 constexpr int  kDefaultMarginL      = 16;
@@ -89,8 +89,12 @@ constexpr int  kCornerRadius        = 8;
 constexpr int  kIconSize            = 16;
 constexpr int  kIconTextGap         = 8;        // 图标与文本之间的间距
 
-// 阴影 (body 外围预留, CSS 5 层 box-shadow 衰减空间)
-constexpr int  kShadowMargin        = 12;
+// 阴影 (Pascal UI_Tooltip 风格: 21 层渐变描边构成柔和 glow)
+constexpr int  kShadowMargin        = 20;
+constexpr int  kShadowSteps         = 21;
+constexpr float kShadowMaxBlurFactor = 40.0f / kShadowSteps;   // ≈1.905, 最大描边宽度 = 40 px
+constexpr float kShadowOpacityFactor = 0.035f;
+constexpr int  kShadowOffsetY       = 1;
 
 // 三角箭头
 constexpr int  kArrowSize           = 7;        // 三角的"半宽" (像素), 即从底边到顶点的距离
@@ -124,6 +128,7 @@ struct _XTip_Entry
 	xtooltip_align_h_   alignH         = xtooltip_align_h_center;
 	xtooltip_align_v_   alignV         = xtooltip_align_v_center;
 	xtooltip_arrow_side_ arrowSide     = xtooltip_arrow_side_auto;
+	BOOL                showArrow      = TRUE;        // 默认显示三角箭头
 	COLORREF            customText     = kTheme_DarkText;
 	COLORREF            customBg       = kTheme_DarkBg;
 	int                 marginL        = kDefaultMarginL;
@@ -357,14 +362,16 @@ void LayoutTooltip(const _XTip_Entry& e)
 	if (bodyW < kIconSize + e.marginL + e.marginR) bodyW = kIconSize + e.marginL + e.marginR;
 	if (bodyH < kIconSize + e.marginT + e.marginB) bodyH = kIconSize + e.marginT + e.marginB;
 
-	// 3. 窗口尺寸 = body + 阴影外圈 + 箭头侧 (箭头在哪边, 那边加 kArrowSize)
+	// 3. 窗口尺寸 = body + 阴影外圈 + 箭头侧 (箭头在哪边, 那边加 kArrowSize). showArrow=FALSE 时不预留.
 	int padL = kShadowMargin, padT = kShadowMargin, padR = kShadowMargin, padB = kShadowMargin;
-	switch (g.arrowSide){
-	case _XTip_ArrowSide_Left:   padL += kArrowSize; break;
-	case _XTip_ArrowSide_Right:  padR += kArrowSize; break;
-	case _XTip_ArrowSide_Top:    padT += kArrowSize; break;
-	case _XTip_ArrowSide_Bottom: padB += kArrowSize; break;
-	default: break;
+	if (e.showArrow){
+		switch (g.arrowSide){
+		case _XTip_ArrowSide_Left:   padL += kArrowSize; break;
+		case _XTip_ArrowSide_Right:  padR += kArrowSize; break;
+		case _XTip_ArrowSide_Top:    padT += kArrowSize; break;
+		case _XTip_ArrowSide_Bottom: padB += kArrowSize; break;
+		default: break;
+		}
 	}
 
 	g.bodyOffX = padL;
@@ -431,7 +438,7 @@ void LayoutTooltip(const _XTip_Entry& e)
 //   XEle_PointClientToWndClientDPI: 元素客户区逻辑 -> 窗口客户区物理
 //   Win32 ClientToScreen:           窗口客户区物理 -> 屏幕物理
 //============================================================================
-void CalcTipAnchorScreen(HELE hSrc, _XTip_ArrowSide side,
+void CalcTipAnchorScreen(HELE hSrc, _XTip_ArrowSide side, BOOL withArrow,
                          float scale, int* outX, int* outY)
 {
 	auto& g = G();
@@ -458,31 +465,32 @@ void CalcTipAnchorScreen(HELE hSrc, _XTip_ArrowSide side,
 	int midX = (eleTL.x + eleBR.x) / 2;
 	int midY = (eleTL.y + eleBR.y) / 2;
 
-	// 三角顶点 in tooltip window 坐标 (逻辑 -> 物理).
-	// 注: bodyOffX/Y 已包含 arrow 一侧的 kArrowSize 内 (LayoutTooltip 时算的).
-	// 所以箭头尖端 = body 边 + 反向 kArrowSize.
+	// 锚点坐标 in tooltip window: withArrow=TRUE 则为三角顶点 (body 边 ± kArrowSize),
+	// FALSE 则为 body 本身边, 避免关闭三角后与元素之间出现 kArrowSize 的间隔.
+	int armX = withArrow ? kArrowSize : 0;
+	int armY = withArrow ? kArrowSize : 0;
 	int anchorX = midX, anchorY = midY;
 	int tipX = 0, tipY = 0;
 	switch (side){
 	case _XTip_ArrowSide_Left:
 		anchorX = eleBR.x;  anchorY = midY;
-		tipX = RP((g.bodyOffX - kArrowSize) * scale);
+		tipX = RP((g.bodyOffX - armX) * scale);
 		tipY = RP((g.bodyOffY + g.arrowEdgePos) * scale);
 		break;
 	case _XTip_ArrowSide_Right:
 		anchorX = eleTL.x;  anchorY = midY;
-		tipX = RP((g.bodyOffX + g.bodyW + kArrowSize) * scale);
+		tipX = RP((g.bodyOffX + g.bodyW + armX) * scale);
 		tipY = RP((g.bodyOffY + g.arrowEdgePos) * scale);
 		break;
 	case _XTip_ArrowSide_Top:
 		anchorX = midX;     anchorY = eleBR.y;
 		tipX = RP((g.bodyOffX + g.arrowEdgePos) * scale);
-		tipY = RP((g.bodyOffY - kArrowSize) * scale);
+		tipY = RP((g.bodyOffY - armY) * scale);
 		break;
 	case _XTip_ArrowSide_Bottom:
 		anchorX = midX;     anchorY = eleTL.y;
 		tipX = RP((g.bodyOffX + g.arrowEdgePos) * scale);
-		tipY = RP((g.bodyOffY + g.bodyH + kArrowSize) * scale);
+		tipY = RP((g.bodyOffY + g.bodyH + armY) * scale);
 		break;
 	default:
 		// 不应到这, 退化为元素下方居中.
@@ -676,7 +684,7 @@ void ShowTipFor(HELE hSrc)
 
 	// 3) 算屏幕位置 (锚点 = 元素对应边中点, 不是鼠标)
 	int wx = 0, wy = 0;
-	CalcTipAnchorScreen(hSrc, g.arrowSide, scale, &wx, &wy);
+	CalcTipAnchorScreen(hSrc, g.arrowSide, e.showArrow, scale, &wx, &wy);
 
 	// 4) 文本色 *必须* 在窗口可见 / SetSize 之前写入元素 (那些操作会同步触发 paint).
 	//    body 默认无 TextColor -> 走 XCGUI 系统默认 (经常是黑/白随主题), 在透明窗口
@@ -777,33 +785,28 @@ int CALLBACK _XTip_OnPaint(HELE hEle, HDRAW hDraw, BOOL* pbHandled)
 	RECT bodyRc{ g.bodyOffX, g.bodyOffY,
 	             g.bodyOffX + g.bodyW, g.bodyOffY + g.bodyH };
 
-	// 1) 阴影 halo: 4 层逐渐外扩 + alpha 递减, 近似 CSS 5 层 box-shadow.
-	//    CSS 数据:
-	//      L1 (31,31,31, 1%)  16y 8b
-	//      L2 (31,31,31, 4%)  12y 6b
-	//      L3 (31,31,31, 7%)  4y  4b
-	//      L4 (31,31,31, 8%)  1.5y 3b
-	//    我们用同心扩张矩形堆叠, 每层 alpha = "blur 半径内的平均不透明度".
-	struct ShadowLayer { int dx, dy, expand; BYTE alpha; };
-	static const ShadowLayer kLayers[4] = {
-		{0, 16, 8,  3 },   // ~1% * 60 范围估算
-		{0, 12, 6,  10},   // ~4%
-		{0,  4, 4,  18},   // ~7%
-		{0,  2, 3,  20},   // ~8%
-	};
-	for (const auto& L : kLayers){
-		RECT rs{ bodyRc.left   - L.expand + L.dx,
-		         bodyRc.top    - L.expand + L.dy,
-		         bodyRc.right  + L.expand + L.dx,
-		         bodyRc.bottom + L.expand + L.dy };
-		COLORREF cShadow = ARGB(31, 31, 31, L.alpha);
-		XDraw_SetBrushColor(hDraw, cShadow);
-		XDraw_FillRoundRect(hDraw, &rs,
-			kCornerRadius + L.expand, kCornerRadius + L.expand);
+	// 1) 阴影: 参考 Pascal UI_Tooltip — 对 body 圆角矩形做 21 层描边叠加,
+	//    每层描边宽度 i*kShadowMaxBlurFactor (i 越大越粗), alpha 按 ((22-i)/21)^2 衰减,
+	//    形成中心实、外缘渐隐的柔和 glow. Y 方向偏移 kShadowOffsetY 模拟落影.
+	{
+		RECTF rsF{ (float)bodyRc.left,
+		           (float)bodyRc.top    + kShadowOffsetY,
+		           (float)bodyRc.right,
+		           (float)bodyRc.bottom + kShadowOffsetY };
+		for (int i = kShadowSteps; i >= 1; --i){
+			float t = (float)(kShadowSteps + 1 - i) / (float)kShadowSteps;
+			float opacity = kShadowOpacityFactor * t * t;
+			BYTE alpha = (BYTE)std::min<int>(255, RP(opacity * 255.0));
+			if (alpha == 0) continue;
+			XDraw_SetLineWidthF(hDraw, i * kShadowMaxBlurFactor);
+			XDraw_SetBrushColor(hDraw, ARGB(0, 0, 0, alpha));
+			XDraw_DrawRoundRectF(hDraw, &rsF, (float)kCornerRadius, (float)kCornerRadius);
+		}
+		XDraw_SetLineWidth(hDraw, 1);
 	}
 
 	// 2) 三角 (画在 body 实心之前, 这样三角与 body 自然融为一体, 圆角处不切断)
-	if (g.arrowSide != _XTip_ArrowSide_None){
+	if (e.showArrow && g.arrowSide != _XTip_ArrowSide_None){
 		DrawTriangle(hDraw, g.arrowSide,
 			bodyRc.left, bodyRc.top, bodyRc.right, bodyRc.bottom,
 			g.arrowEdgePos, kArrowSize, cBg);
@@ -1136,6 +1139,21 @@ xtooltip_arrow_side_ CXTooltip::GetArrowSide(HELE hEle)
 	auto& g = G();
 	auto it = g.registry.find(hEle);
 	return (it == g.registry.end()) ? xtooltip_arrow_side_auto : it->second.arrowSide;
+}
+
+BOOL CXTooltip::SetShowArrow(HELE hEle, BOOL bShow)
+{
+	auto* p = _GetOrCreate(hEle);
+	if (!p) return FALSE;
+	p->showArrow = bShow ? TRUE : FALSE;
+	return TRUE;
+}
+
+BOOL CXTooltip::GetShowArrow(HELE hEle)
+{
+	auto& g = G();
+	auto it = g.registry.find(hEle);
+	return (it == g.registry.end()) ? TRUE : it->second.showArrow;
 }
 
 BOOL CXTooltip::SetTheme(HELE hEle, xtooltip_theme_ theme)

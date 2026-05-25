@@ -1,4 +1,4 @@
-// Auto-generated: Tooltip 类型图标 SVG 资源 (UTF-8 字面量, 带 BOM)
+// Auto-generated: Tooltip 类型图标 SVG 资源 (UTF-8 字面量)
 // 通过 XSvg_LoadStringUtf8 在 EnsureSvgsLoaded() 里加载, 销毁时 XSvg_Destroy.
 // 内容直接复制自 ./svg/{1..4}.svg, 用 R"SVG(...)SVG" raw literal 避免转义.
 //   1.svg = success (绿),  2.svg = info (蓝i),  3.svg = warning (黄),  4.svg = error (红)
