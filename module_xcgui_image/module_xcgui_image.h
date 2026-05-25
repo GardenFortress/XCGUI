@@ -174,13 +174,53 @@ class CXImageEx : public CXEle
 {
 public:
 	//@隐藏{
+	// 生命周期约束 (与 XCGUI 设计理念一致):
+	//   - 必须用 `new CXImageEx(...)` 堆分配, *不允许栈分配* (~dtor protected).
+	//   - *不允许外部 delete* / Release. 句柄死亡时自动 `delete this` (见下).
+	//   - 句柄死亡 (父级销毁 / 用户主动 Detach): 详见三种路径
+	//       (1) HELE 被 XCGUI 销毁  -> XE_DESTROY -> OnDestroyImpl -> 释放资源 + delete this
+	//       (2) 用户 Attach 到新 HELE -> DetachInternal 旧 HELE (反注册事件 + 清资源, 但
+	//           不 delete this) -> AttachInternal 新 HELE
+	//       (3) 用户主动 Detach() / *this = NULL -> 同 (2) 前半, 包装存活待重新 Attach
+	//           (如果就此放掉指针 -> 漏 sizeof(CXImageEx) 字节, 用户自负)
+	//   - 句柄只读: 外部用 `pImg->GetEleHandle()` / `(HELE)*pImg` /
+	//     `pImg->GetHXCGUI()` 获取; m_hEle 私有, 禁止外部直接读写.
+	//   - 句柄迁移: `*pImg = hOtherEle` 等价于 `pImg->AttachToEle(hOtherEle)`,
+	//     自动反注册旧 HELE 上的事件 + 清空 FFmpeg/D2D 资源, 再挂到新 HELE.
 	CXImageEx();
-	virtual ~CXImageEx();
 	virtual HXCGUI GetHXCGUI(){ return m_hEle; }
 	operator HELE() const { return m_hEle; }
 	operator HXCGUI(){ return m_hEle; }
-	virtual void operator=(const HELE hEle){ m_hEle = hEle; }
+	//   operator=(HELE): 接收已存在的元素句柄, 等价于 AttachToEle. NULL / 无效 -> Detach.
+	virtual void operator=(const HELE hEle);
 	//@隐藏}
+
+//@备注 获取元素句柄. 外部传给 XCGUI 原生 API (XEle_xxx / XWidget_xxx 等) 时使用.
+//      返回的句柄属于 XCGUI, *请勿* 自行 XEle_Destroy - 父级销毁时会自动释放.
+//@返回 HELE 元素句柄. 未 Create / 已 Detach 时返回 NULL.
+//@别名  取句柄()
+	HELE GetEleHandle() const { return m_hEle; }
+
+//@备注 把本图片包装 *附加* 到一个已存在的 HELE 上 (该 HELE 由外部 XEle_Create 等
+//      建好). 内部会:
+//        (1) 若已附加到旧 HELE -> 先 Detach (反注册事件 + 清 FFmpeg/D2D/GDI 资源,
+//            *不* 销毁旧 HELE 本身, 由其父级负责);
+//        (2) 在新 HELE 上注册 XE_PAINT / XE_SIZE / XE_XC_TIMER / XE_DESTROY, 启动 16ms 定时器;
+//        (3) RefreshDpiScale + RebuildBkInfo.
+//      之后该 HELE 销毁时 (XE_DESTROY) 会自动释放本包装 (`delete this`).
+//      *不要* 把同一个 HELE 附加给两个 CXImageEx, 也不要把别人的 HELE 抢过来用 - 行为未定义.
+//@参数 hEle 已存在的元素句柄.
+//@返回 TRUE = 成功; FALSE = hEle 非合法元素句柄.
+//@别名  附加到元素()
+	BOOL AttachToEle(HELE hEle);
+
+//@备注 解除当前 HELE 的事件钩子, 清空 FFmpeg / D2D / GDI 资源, m_hEle 置 NULL.
+//      *不* 销毁 HELE 本身 (XCGUI 自有元素由父级销毁). 调用后本包装可重新 Attach
+//      到新 HELE; 若不再使用, 用户需自行 `delete pImg` 释放包装内存
+//      (此时 dtor protected 的限制需用 `friend` 或派生类 - 实际场景中 *一般不需要*,
+//      直接走 `*pImg = NULL` 释放 HELE 钩子后任其等下次 Attach 即可).
+//@别名  解除附加()
+	void Detach();
 
 //@备注 创建图片元素.
 //@参数 x 元素x坐标
@@ -337,8 +377,17 @@ public:
 	void SetOnEnded(XIMAGE_PROC_ENDED cb, void* pUser);
 
 	//@隐藏{
+protected:
+	// dtor protected: 阻止外部栈分配 + `delete pImg`, 但允许 `new CXImageEx(...)`
+	// (MSVC 异常路径需可见 dtor). 内部通过 OnDestroyImpl 末尾 `delete this` 自销毁.
+	virtual ~CXImageEx();
+
 private:
 	// ===== 元素 / DPI =====
+	// m_hEle 在此处再声明一份 (private), shadow 掉基类 CXEle::m_hEle (public).
+	// 目的: 阻止外部 `pImg->m_hEle = x` 偷换句柄; 外部只能通过 GetEleHandle()
+	// 等 getter 只读访问. CXImageEx 所有内部方法用 m_hEle 时, 名称查找优先命中
+	// 此私有字段 (单一管理). 基类的 m_hEle 字段仍保留 NULL, 未使用 - 无副作用.
 	HELE  m_hEle      = NULL;
 	float m_dpiScale  = 1.0f;
 
@@ -429,7 +478,14 @@ private:
 	// =================================================================
 	// 内部辅助 (declare here, define in cpp)
 	// =================================================================
+	// Attach 主流程: 设 m_hEle / 装事件 / 启 timer / 刷 DPI 与 BkInfo.
+	// 不做合法性校验, 调用方 (AttachToEle / Create) 已验证.
+	void AttachInternal(HELE hEle);
+	// Detach 主流程: 反注册事件 / 关 timer / 清空 FFmpeg 帧 / 释放 D2D-GDI-sws / m_hEle=NULL.
+	// 区别于 OnDestroyImpl: 这里 *不 delete this* (元素还在或将被换掉, 包装存活).
+	void DetachInternal();
 	void InstallEvents();
+	void UninstallEvents();
 	int  OnPaintImpl   (HELE hEle, HDRAW hDraw, BOOL* pbHandled);
 	int  OnSizeImpl    (HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
 	int  OnTimerImpl   (HELE hEle, UINT nTimerId, BOOL* pbHandled);

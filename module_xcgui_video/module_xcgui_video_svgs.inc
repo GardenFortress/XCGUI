@@ -1,4 +1,4 @@
-// Auto-generated: 控件栏按钮 SVG 资源 (UTF-8 字面量, 无 BOM)
+// Auto-generated: 控件栏按钮 SVG 资源 (UTF-8 字面量)
 // 通过 XSvg_LoadStringUtf8 在 EnsureSvgsLoaded() 里加载, 销毁时 XSvg_Destroy.
 // 内容直接复制自 ./svg/*.svg, 用 R"SVG(...)SVG" raw literal 避免转义.
 #pragma once

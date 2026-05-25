@@ -319,6 +319,38 @@ enum xvideo_hwaccel_
 	xvideo_hwaccel_dxva2   = 3,   ///<仅 DXVA2 (Vista+). Win 7 fallback. 比 D3D11VA 老但兼容范围更广.
 };
 
+///视频信息 (CXVideo::GetVideoInfo / GetVideoCover 回填). 静态接口, 不需要实例化播放器.
+//@别名 视频信息
+struct XVideoInfo
+{
+	//@别名 封面文件地址
+	wchar_t coverPath[1024];        ///<封面保存全路径 (PNG, 系统缓存目录或用户指定). 抓帧失败时首字符为 0.
+	//@别名 视频文件地址
+	wchar_t videoPath[1024];        ///<视频源全路径 (原样回填, 方便上层一并保存)
+	//@别名 容器格式
+	wchar_t formatName[64];        ///<容器名: mp4 / mkv / mov / flv / avi / webm / ts / ...
+	//@别名 视频编码
+	wchar_t videoCodec[64];        ///<视频编码: h264 / hevc / av1 / vp9 / mpeg4 / ...
+	//@别名 音频编码
+	wchar_t audioCodec[64];        ///<音频编码: aac / mp3 / opus / ac3 / ... 无音频则为空串
+	//@别名 视频宽度
+	int     width;                 ///<视频宽 (像素)
+	//@别名 视频高度
+	int     height;                ///<视频高 (像素)
+	//@别名 视频时长
+	double  durationSec;           ///<时长 (秒). 流媒体未知时为 0
+	//@别名 总比特率
+	int64_t bitrate;               ///<容器总比特率 (bps). 未知为 0
+	//@别名 帧率
+	double  fps;                   ///<平均帧率 (avg_frame_rate). 未知为 0
+	//@别名 文件大小
+	int64_t fileSize;              ///<文件字节数. 网络源为 0
+	//@别名 是否含音频
+	int     hasAudio;              ///<1 = 有音频流, 0 = 无
+	//@别名 总帧数估算
+	int64_t frameCount;            ///<估算总帧数 = duration * fps. 未知为 0
+};
+
 // 前置声明: 给下面 4 个回调 typedef 使用 (类完整定义在下面).
 class CXVideo;
 
@@ -663,6 +695,46 @@ public:
 //@参数 pUser 用户数据指针; 触发时原样回传. 不需要可填 NULL.
 //@别名  注册事件_视频进度变化()
 	void OnVideoPositionChanged(XVIDEO_PROC_POSITION fn, void* pUser = NULL);
+
+	// =================================================================
+	// 静态工具: 视频元信息 / 封面抓取 (无需实例化播放器)
+	// 适用场景: 文件列表渲染缩略图, 上传前预览取信息, 等等.
+	// =================================================================
+
+//@备注 一次性获取视频完整元信息 + 抓取封面到系统缓存. 内部:
+//        (1) avformat_open_input + find_stream_info -> 填 XVideoInfo (容器/编/分辨率/时长/比特率/帧率/文件大小);
+//        (2) seek 到 coverTimeSec 抓首帧, sws -> BGRA -> GDI+ 编码 PNG -> 存到
+//            %TEMP%\xcgui_video_cover\<路径hash>.png, 路径写入 pOutInfo->coverPath.
+//      封面默认抓 *第 1 秒附近的关键帧* (coverTimeSec=1.0); 短视频自动 clamp 到 0.
+//      返回 FALSE 时, pOutInfo 内容未定义 (除 videoPath 已回填).
+//@参数 pVideoPath 视频文件全路径 (UTF-16). 支持本地 file / http / https / rtsp 等 FFmpeg 协议.
+//@参数 pOutInfo   输出结构. 不能为 NULL.
+//@参数 coverTimeSec 抓帧时间点 (秒). 0 = 首帧; 默认 1.0 秒 (跳过黑场片头).
+//@返回 TRUE = 成功 (info + cover 全部就绪); FALSE = 打开失败 / 无视频流 / 解码失败.
+//@别名  视频_取信息()
+	static BOOL GetVideoInfo(const wchar_t* pVideoPath, XVideoInfo* pOutInfo, double coverTimeSec = 1.0);
+
+//@备注 仅抓取视频封面, 不回填完整信息. 适合只要缩略图的场景.
+//      pSaveDir = NULL 时, 默认保存到 %TEMP%\xcgui_video_cover\, 文件名按视频路径 hash 生成.
+//      pSaveDir != NULL 时, 保存到 <pSaveDir>\<hash>.png (目录不存在自动创建).
+//@参数 pVideoPath 视频文件全路径
+//@参数 pSaveDir   保存目录 (NULL = 系统缓存目录)
+//@参数 coverTimeSec 抓帧时间点 (秒). 默认 1.0
+//@参数 pOutCoverPath 输出缓冲: 实际生成的封面 PNG 全路径. 可为 NULL.
+//@参数 outBufLen   pOutCoverPath 缓冲长度 (wchar_t 个数). 建议 >= 260.
+//@返回 TRUE = 成功; FALSE = 失败.
+//@别名  视频_取封面()
+	static BOOL GetVideoCover(const wchar_t* pVideoPath, const wchar_t* pSaveDir = NULL,
+	                          double coverTimeSec = 1.0,
+	                          wchar_t* pOutCoverPath = NULL, int outBufLen = 260);
+
+//@备注 获取本模块使用的系统缓存目录 (%TEMP%\xcgui_video_cover\). 目录不存在会自动创建.
+//      可用来批量清理上层缓存.
+//@参数 pOutDir 输出缓冲, 接收目录全路径 (以反斜杠结尾).
+//@参数 outBufLen 缓冲长度 (wchar_t 个数). 建议 >= 260.
+//@返回 TRUE = 目录就绪; FALSE = 创建失败 / 缓冲过小.
+//@别名  视频_取缓存目录()
+	static BOOL GetVideoCacheDir(wchar_t* pOutDir, int outBufLen = 260);
 
 	//@隐藏{
 private:

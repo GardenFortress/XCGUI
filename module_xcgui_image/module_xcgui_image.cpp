@@ -99,11 +99,12 @@ CXImageEx::CXImageEx(){
 }
 
 CXImageEx::~CXImageEx(){
-	// 析构路径走 Unload (释放帧 / sws), 渲染资源由 OnDestroyImpl 释放.
-	// 析构发生时 XCGUI 元素可能已被销毁 (m_hEle = NULL by OnDestroyImpl), 这里
-	// 只清不依赖元素的资源.
+	// 正常路径: OnDestroyImpl 已先一步释放全部重资源并 `delete this`, dtor 跑到
+	// 这里时所有指针都已 NULL, 下面的清理都是 no-op.
+	// 异常路径: `new CXImageEx()` 后未调 Create() 又被立即销毁 (理论上 dtor private
+	// 已经堵死外部 delete; 唯一可能是构造抛异常时的栈回滚). 这种场景下 OnDestroyImpl
+	// 不会触发, 这里做最后兜底.
 	Unload();
-	// 兜底: 如果 OnDestroyImpl 没轮到 (例如对象创建后从未 Create), 这里也释放.
 	if (m_pSws){ sws_freeContext(m_pSws); m_pSws = NULL; }
 	SafeRelease(m_pD2DBmp);
 	m_pLastRT = NULL;
@@ -111,18 +112,96 @@ CXImageEx::~CXImageEx(){
 }
 
 //============================================================================
-// Create / 事件注册
+// Create / Attach / Detach / 事件注册
+//
+// 关系图:
+//   外部入口         内部主流程                     备注
+//   ---------------------------------------------------
+//   Create()    -->  DetachInternal? + AttachInternal(XEle_Create 得到的 HELE)
+//   AttachToEle -->  DetachInternal? + AttachInternal(用户传入的 HELE)
+//   operator=   -->  AttachToEle / Detach          语法糖 (NULL/非法 -> Detach)
+//   Detach()    -->  DetachInternal                仅断开, 不销毁 HELE
+//   XE_DESTROY  -->  OnDestroyImpl                 HELE 死亡 -> 清资源 + delete this
+//
+// DetachInternal vs OnDestroyImpl 差异:
+//   - DetachInternal 走 UninstallEvents (反注册 + 关 timer), HELE 仍存活, *不* delete this
+//   - OnDestroyImpl  不反注册 (XCGUI 已清自己的事件表), 末尾 `delete this`
 //============================================================================
 HELE CXImageEx::Create(int x, int y, int cx, int cy, HXCGUI hParent){
+	// 已附加旧 HELE -> 先解除附加. 旧 HELE 本身由其父级负责销毁, 这里只断钩子.
+	if (XC_IsHELE((HXCGUI)m_hEle)){
+		DetachInternal();
+	}
 	// 直接 XEle_Create: 不需要 CXLayout 那套自动布局 (没有内置控件栏 / 子节点),
 	// 普通 XEle 元素就够 - 也避开 CXLayout default mouse-through 等需要额外配置的细节.
-	m_hEle = XEle_Create(x, y, cx, cy, hParent);
-	if (!m_hEle) return NULL;
+	HELE h = XEle_Create(x, y, cx, cy, hParent);
+	if (!h) return NULL;
+	AttachInternal(h);
+	return h;
+}
 
+BOOL CXImageEx::AttachToEle(HELE hEle){
+	// 合法性校验: 必须是 XCGUI 已注册的元素句柄. NULL / 已销毁 / 非元素 句柄都走 FALSE.
+	// 注意: XC_IsHELE 形参是 HXCGUI, 这里显式转一下.
+	if (!XC_IsHELE((HXCGUI)hEle)){
+		// 显式 detach 当前; 与 CXBlur::operator= 对齐 (传非法 = 释放).
+		Detach();
+		return FALSE;
+	}
+	// 相同元素 -> no-op, 避免误反注册又重注册触发 timer 抖动.
+	if (m_hEle == hEle) return TRUE;
+	// 切换前先断旧的.
+	if (XC_IsHELE((HXCGUI)m_hEle)){
+		DetachInternal();
+	}
+	AttachInternal(hEle);
+	return TRUE;
+}
+
+void CXImageEx::Detach(){
+	if (!XC_IsHELE((HXCGUI)m_hEle)) {
+		// 没附加任何 HELE: 仍清一次内部资源, 防止 LoadFromFile 后又 Detach
+		// (LoadFromFile 可填了 m_frames 但 HELE 中途被外部销毁过).
+		Unload();
+		if (m_pSws){ sws_freeContext(m_pSws); m_pSws = NULL; }
+		SafeRelease(m_pD2DBmp);
+		m_pLastRT = NULL;
+		m_d2dBmpW = m_d2dBmpH = 0;
+		ReleaseGdiDib();
+		m_hEle = NULL;
+		return;
+	}
+	DetachInternal();
+}
+
+void CXImageEx::operator=(const HELE hEle){
+	// IDE 风格糖: `*pImg = hEle`. 合法 -> Attach; 非法/NULL -> Detach.
+	if (XC_IsHELE((HXCGUI)hEle)){
+		AttachToEle(hEle);
+	} else {
+		Detach();
+	}
+}
+
+void CXImageEx::AttachInternal(HELE hEle){
+	// 进入前调用方已保证 hEle 合法且本对象未持其它 HELE.
+	m_hEle = hEle;
 	RefreshDpiScale();
 	RebuildBkInfo();
 	InstallEvents();
-	return m_hEle;
+}
+
+void CXImageEx::DetachInternal(){
+	// 顺序与 OnDestroyImpl 几乎一致, 但 *多* UninstallEvents (HELE 还活着, 必须主动反注册);
+	// *少* 末尾 delete this (包装对象继续存活, 待 Re-Attach 或用户决定生命周期).
+	UninstallEvents();
+	Unload();
+	if (m_pSws){ sws_freeContext(m_pSws); m_pSws = NULL; }
+	SafeRelease(m_pD2DBmp);
+	m_pLastRT = NULL;
+	m_d2dBmpW = m_d2dBmpH = 0;
+	ReleaseGdiDib();
+	m_hEle = NULL;
 }
 
 void CXImageEx::InstallEvents(){
@@ -134,10 +213,23 @@ void CXImageEx::InstallEvents(){
 	// XE_XC_TIMER: 16ms tick 驱动动画 + 派发 pending 事件.
 	// 全程开启即使空闲也只 ~0.01% CPU, 比 lazy start/stop 简单可靠.
 	XEle_RegEventCPP1(m_hEle, XE_XC_TIMER, &CXImageEx::OnTimerImpl);
-	// XE_DESTROY: 释放 D2D / GDI / FFmpeg 资源.
+	// XE_DESTROY: 释放 D2D / GDI / FFmpeg 资源 + delete this.
 	XEle_RegEventCPP1(m_hEle, XE_DESTROY,  &CXImageEx::OnDestroyImpl);
 
 	XEle_SetXCTimer(m_hEle, kTimerId_Tick, kTimerInterval_Ms);
+}
+
+void CXImageEx::UninstallEvents(){
+	if (!XC_IsHELE((HXCGUI)m_hEle)) return;
+	// 关 timer 必须先于 RemoveEvent: 否则窗口下一个 tick 仍可能进 OnTimerImpl.
+	XEle_KillXCTimer(m_hEle, kTimerId_Tick);
+	// CPP1 注册的回调用 XEle_RemoveEventCPP 反注册 (XCGUI 内部按函数名字符串
+	// 做去重 / 卸载键, RegEventCPP 与 RegEventCPP1 共享同一张表, 移除用同一宏).
+	// 反注册顺序与 InstallEvents 镜像.
+	XEle_RemoveEventCPP(m_hEle, XE_PAINT,    &CXImageEx::OnPaintImpl);
+	XEle_RemoveEventCPP(m_hEle, XE_SIZE,     &CXImageEx::OnSizeImpl);
+	XEle_RemoveEventCPP(m_hEle, XE_XC_TIMER, &CXImageEx::OnTimerImpl);
+	XEle_RemoveEventCPP(m_hEle, XE_DESTROY,  &CXImageEx::OnDestroyImpl);
 }
 
 int CXImageEx::OnDestroyImpl(HELE /*hEle*/, BOOL* /*pbHandled*/){
@@ -145,7 +237,13 @@ int CXImageEx::OnDestroyImpl(HELE /*hEle*/, BOOL* /*pbHandled*/){
 	//   (1) 关 timer (避免 join 期间 timer 还触发).
 	//   (2) Unload 释放帧 / sws.
 	//   (3) D2D / GDI 渲染资源也释放 (D2D Bitmap 跟 RT 绑, RT 析构后不能再 Release).
-	//   (4) m_hEle = NULL: 防后续 ~CXImageEx -> RedrawSelf 拿陈旧句柄崩 / 弹"句柄无效".
+	//   (4) m_hEle = NULL: 防 `delete this` 触发 dtor 兜底路径里再走元素相关代码.
+	//   (5) `delete this`: 与 XCGUI 设计对齐 - C++ 包装的生命周期绑定到 HELE.
+	//        父窗口/父元素销毁 -> XE_DESTROY -> 这里释放所有资源 + 释放包装本身,
+	//        外部既不需要也不允许手动 delete (dtor 已 protected).
+	//        delete this 必须在最后一行: 之后任何对成员的访问都是 use-after-free.
+	//   注: 这里 *不* 调 UninstallEvents - XE_DESTROY 触发时 XCGUI 已在拆事件表,
+	//   主动 RemoveEvent 多此一举且可能与拆表过程竞争.
 	XEle_KillXCTimer(m_hEle, kTimerId_Tick);
 	Unload();
 	if (m_pSws){ sws_freeContext(m_pSws); m_pSws = NULL; }
@@ -154,6 +252,7 @@ int CXImageEx::OnDestroyImpl(HELE /*hEle*/, BOOL* /*pbHandled*/){
 	m_d2dBmpW = m_d2dBmpH = 0;
 	ReleaseGdiDib();
 	m_hEle = NULL;
+	delete this;
 	return 0;
 }
 

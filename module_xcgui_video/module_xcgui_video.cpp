@@ -3117,3 +3117,345 @@ int CXVideo::OnPaintSliderThumb(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
 	XDraw_FillEllipse(hDraw, &rc);
 	return 0;
 }
+
+//============================================================================
+// 静态工具: 视频封面 / 视频信息  (从 module_xcgui_image 迁移过来)
+//
+// 设计:
+//   - 不复用 CXVideo 实例字段 (m_pVCtx 等): 静态接口需在无实例时也能工作, 而且
+//     调用方可能并发多次 (列表里给一堆视频抓缩略图).
+//   - 也不依赖 CXVideo 的 worker 线程模型 / WASAPI / 硬件解码上下文: 这里只做
+//     一次性 *软解 1 帧 + 编码 PNG*, 路径远比播放器轻.
+//   - GDI+ 编码 PNG. WIC 路径更可控但要 COM 模板, 编译时间贵; GDI+ 已在系统里,
+//     用 GdiplusStartup 静态 once 启动 (token 与 XCGUI 自身 startup 互不干扰).
+//   - 抓帧策略: avformat_seek_file 到 coverTimeSec 对应的 pts ->
+//     循环 av_read_frame + avcodec_send/receive_frame, 拿到 *第一帧* (≥ seek 点).
+//     若 seek 失败或位置超时长, 自动回退到 0 + 从头解.
+//   - 颜色空间: sws_scale 直接转 BGRA (PixelFormat32bppARGB GDI+ 兼容).
+//   - hash: 路径走 FNV-1a 64bit, 拼成 16 位十六进制做文件名, 同一视频反复
+//          抓取直接命中缓存 (除非用户改了 coverTimeSec).
+//============================================================================
+
+#include <gdiplus.h>
+#include <shlwapi.h>
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "shlwapi.lib")
+
+namespace {
+
+// GDI+ 静态启动 (与 XCGUI 自身的 startup 互不干扰: token 各自独立).
+struct _XVideoCover_GdiplusOnce{
+	ULONG_PTR token = 0;
+	_XVideoCover_GdiplusOnce(){
+		Gdiplus::GdiplusStartupInput in;
+		Gdiplus::GdiplusStartup(&token, &in, NULL);
+	}
+	~_XVideoCover_GdiplusOnce(){
+		if (token) Gdiplus::GdiplusShutdown(token);
+	}
+};
+static void _XVideoCover_EnsureGdiplus(){
+	static _XVideoCover_GdiplusOnce s_once;
+	(void)s_once;
+}
+
+// 取 PNG 编码器 CLSID. 失败返 FALSE.
+static BOOL _XVideoCover_GetPngEncoderClsid(CLSID* pOut){
+	UINT num = 0, size = 0;
+	if (Gdiplus::GetImageEncodersSize(&num, &size) != Gdiplus::Ok || size == 0) return FALSE;
+	std::vector<BYTE> buf(size);
+	Gdiplus::ImageCodecInfo* info = (Gdiplus::ImageCodecInfo*)buf.data();
+	if (Gdiplus::GetImageEncoders(num, size, info) != Gdiplus::Ok) return FALSE;
+	for (UINT i = 0; i < num; ++i){
+		if (wcscmp(info[i].MimeType, L"image/png") == 0){
+			*pOut = info[i].Clsid;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+// FNV-1a 64bit, 对 wchar 缓冲整段做; 大小写不区分 (路径 Windows 不敏感).
+static uint64_t _XVideoCover_HashPathW(const wchar_t* p){
+	uint64_t h = 0xcbf29ce484222325ULL;
+	for (; *p; ++p){
+		wchar_t c = *p;
+		if (c >= L'A' && c <= L'Z') c = (wchar_t)(c + 32);
+		h ^= (uint64_t)(uint16_t)c;
+		h *= 0x100000001b3ULL;
+	}
+	return h;
+}
+
+// 解码视频流, 抓 *seek 后的第 1 帧*, 输出为 (BGRA, W, H).
+// 成功填 outBgra (size = W*H*4) 返 TRUE. 失败返 FALSE.
+static BOOL _XVideoCover_GrabFrameBgra(AVFormatContext* pFmt, int videoStreamIdx,
+                                       double coverTimeSec,
+                                       std::vector<uint8_t>* outBgra, int* outW, int* outH){
+	if (!pFmt || videoStreamIdx < 0) return FALSE;
+	AVStream* st = pFmt->streams[videoStreamIdx];
+	const AVCodec* dec = avcodec_find_decoder(st->codecpar->codec_id);
+	if (!dec) return FALSE;
+	AVCodecContext* pCtx = avcodec_alloc_context3(dec);
+	if (!pCtx) return FALSE;
+	BOOL ok = FALSE;
+	AVFrame* frame = NULL;
+	AVPacket* pkt = NULL;
+	SwsContext* sws = NULL;
+	do{
+		if (avcodec_parameters_to_context(pCtx, st->codecpar) < 0) break;
+		pCtx->thread_count = 1;
+		if (avcodec_open2(pCtx, dec, NULL) < 0) break;
+
+		// Seek: 若 coverTimeSec > 0 且容器可 seek.
+		if (coverTimeSec > 0.0 && pFmt->duration > 0){
+			double durSec = (double)pFmt->duration / (double)AV_TIME_BASE;
+			double t = coverTimeSec;
+			if (t > durSec - 0.05) t = (durSec > 0.2) ? (durSec * 0.1) : 0.0;
+			int64_t ts = (int64_t)(t * AV_TIME_BASE);
+			// 用 AVSEEK_FLAG_BACKWARD 拿前一个关键帧, 解码到目标时间稳.
+			av_seek_frame(pFmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+			avcodec_flush_buffers(pCtx);
+		}
+
+		frame = av_frame_alloc();
+		pkt = av_packet_alloc();
+		if (!frame || !pkt) break;
+
+		// 读包 -> 解码 -> 拿到第一帧立刻退出.
+		int gotFrame = 0;
+		while (!gotFrame){
+			int rr = av_read_frame(pFmt, pkt);
+			if (rr < 0){
+				// EOF: flush 解码器
+				avcodec_send_packet(pCtx, NULL);
+				while (avcodec_receive_frame(pCtx, frame) == 0){ gotFrame = 1; break; }
+				break;
+			}
+			if (pkt->stream_index != videoStreamIdx){
+				av_packet_unref(pkt);
+				continue;
+			}
+			if (avcodec_send_packet(pCtx, pkt) >= 0){
+				while (avcodec_receive_frame(pCtx, frame) == 0){
+					gotFrame = 1;
+					break;
+				}
+			}
+			av_packet_unref(pkt);
+		}
+		if (!gotFrame || frame->width <= 0 || frame->height <= 0) break;
+
+		// 缩放 + 颜色空间转换到 BGRA. 不缩, 保留原始像素.
+		int srcW = frame->width, srcH = frame->height;
+		sws = sws_getContext(srcW, srcH, (AVPixelFormat)frame->format,
+		                     srcW, srcH, AV_PIX_FMT_BGRA,
+		                     SWS_BILINEAR, NULL, NULL, NULL);
+		if (!sws) break;
+
+		std::vector<uint8_t> bgra((size_t)srcW * srcH * 4);
+		uint8_t* dstData[4] = { bgra.data(), NULL, NULL, NULL };
+		int dstStride[4] = { srcW * 4, 0, 0, 0 };
+		sws_scale(sws, frame->data, frame->linesize, 0, srcH, dstData, dstStride);
+
+		*outBgra = std::move(bgra);
+		*outW = srcW;
+		*outH = srcH;
+		ok = TRUE;
+	} while (0);
+
+	if (sws)   sws_freeContext(sws);
+	if (frame) av_frame_free(&frame);
+	if (pkt)   av_packet_free(&pkt);
+	if (pCtx)  avcodec_free_context(&pCtx);
+	return ok;
+}
+
+// 把 BGRA 缓冲存为 PNG (path = UTF-16 全路径). 成功返 TRUE.
+static BOOL _XVideoCover_SaveBgraToPng(const uint8_t* bgra, int w, int h, const wchar_t* path){
+	_XVideoCover_EnsureGdiplus();
+	CLSID clsid;
+	if (!_XVideoCover_GetPngEncoderClsid(&clsid)) return FALSE;
+	// PixelFormat32bppARGB 在 GDI+ 里就是 BGRA byte order (低字节 B, 高字节 A),
+	// 跟 sws AV_PIX_FMT_BGRA 输出一致, 不需要再翻通道.
+	Gdiplus::Bitmap bmp(w, h, w * 4, PixelFormat32bppARGB, (BYTE*)bgra);
+	if (bmp.GetLastStatus() != Gdiplus::Ok) return FALSE;
+	return bmp.Save(path, &clsid, NULL) == Gdiplus::Ok ? TRUE : FALSE;
+}
+
+} // anonymous namespace
+
+BOOL CXVideo::GetVideoCacheDir(wchar_t* pOutDir, int outBufLen){
+	if (!pOutDir || outBufLen < 32) return FALSE;
+	wchar_t tmp[MAX_PATH] = { 0 };
+	DWORD n = ::GetTempPathW(MAX_PATH, tmp);
+	if (n == 0 || n >= MAX_PATH) return FALSE;
+	// tmp 末尾保证带反斜杠 (GetTempPath 规范). 拼上子目录.
+	std::wstring dir(tmp);
+	dir += L"xcgui_video_cover\\";
+	// CreateDirectoryW 已存在返回 ERROR_ALREADY_EXISTS, 视为成功.
+	if (!::CreateDirectoryW(dir.c_str(), NULL)){
+		DWORD e = ::GetLastError();
+		if (e != ERROR_ALREADY_EXISTS) return FALSE;
+	}
+	if ((int)dir.size() + 1 > outBufLen) return FALSE;
+	wcscpy_s(pOutDir, (size_t)outBufLen, dir.c_str());
+	return TRUE;
+}
+
+BOOL CXVideo::GetVideoCover(const wchar_t* pVideoPath, const wchar_t* pSaveDir,
+                            double coverTimeSec,
+                            wchar_t* pOutCoverPath, int outBufLen){
+	if (!pVideoPath || !*pVideoPath) return FALSE;
+
+	// 1) 决定保存目录.
+	wchar_t dirBuf[MAX_PATH] = { 0 };
+	if (pSaveDir && *pSaveDir){
+		wcscpy_s(dirBuf, MAX_PATH, pSaveDir);
+		size_t L = wcslen(dirBuf);
+		if (L > 0 && dirBuf[L - 1] != L'\\' && dirBuf[L - 1] != L'/'){
+			if (L + 1 < MAX_PATH){ dirBuf[L] = L'\\'; dirBuf[L + 1] = 0; }
+		}
+		// 尽力创建 (不递归; 多级目录请调用方自行保证).
+		::CreateDirectoryW(dirBuf, NULL);
+	} else {
+		if (!GetVideoCacheDir(dirBuf, MAX_PATH)) return FALSE;
+	}
+
+	// 2) 拼输出 PNG 全路径.
+	uint64_t h = _XVideoCover_HashPathW(pVideoPath);
+	wchar_t fullPath[MAX_PATH] = { 0 };
+	swprintf_s(fullPath, MAX_PATH, L"%s%016llx.png", dirBuf, (unsigned long long)h);
+
+	// 3) 命中缓存 (同路径 + 已存在 PNG): 直接返回, 不重复抓.
+	if (::PathFileExistsW(fullPath)){
+		if (pOutCoverPath && outBufLen > 0){
+			wcscpy_s(pOutCoverPath, (size_t)outBufLen, fullPath);
+		}
+		return TRUE;
+	}
+
+	// 4) FFmpeg 抓帧.
+	AVFormatContext* pFmt = NULL;
+	std::string utf8 = WideToUtf8(pVideoPath);
+	if (avformat_open_input(&pFmt, utf8.c_str(), NULL, NULL) < 0) return FALSE;
+	BOOL ok = FALSE;
+	do{
+		if (avformat_find_stream_info(pFmt, NULL) < 0) break;
+		int vsi = -1;
+		for (unsigned i = 0; i < pFmt->nb_streams; ++i){
+			if (pFmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO){
+				vsi = (int)i; break;
+			}
+		}
+		if (vsi < 0) break;
+		std::vector<uint8_t> bgra;
+		int w = 0, hgt = 0;
+		if (!_XVideoCover_GrabFrameBgra(pFmt, vsi, coverTimeSec, &bgra, &w, &hgt)) break;
+		if (!_XVideoCover_SaveBgraToPng(bgra.data(), w, hgt, fullPath)) break;
+		ok = TRUE;
+	} while (0);
+	avformat_close_input(&pFmt);
+
+	if (ok && pOutCoverPath && outBufLen > 0){
+		wcscpy_s(pOutCoverPath, (size_t)outBufLen, fullPath);
+	}
+	return ok;
+}
+
+BOOL CXVideo::GetVideoInfo(const wchar_t* pVideoPath, XVideoInfo* pOutInfo, double coverTimeSec){
+	if (!pVideoPath || !*pVideoPath || !pOutInfo) return FALSE;
+	memset(pOutInfo, 0, sizeof(*pOutInfo));
+	wcscpy_s(pOutInfo->videoPath, pVideoPath);
+
+	AVFormatContext* pFmt = NULL;
+	std::string utf8 = WideToUtf8(pVideoPath);
+	if (avformat_open_input(&pFmt, utf8.c_str(), NULL, NULL) < 0) return FALSE;
+	BOOL ok = FALSE;
+	do{
+		if (avformat_find_stream_info(pFmt, NULL) < 0) break;
+
+		// 找首个视频流 + 首个音频流.
+		int vsi = -1, asi = -1;
+		for (unsigned i = 0; i < pFmt->nb_streams; ++i){
+			AVCodecParameters* cp = pFmt->streams[i]->codecpar;
+			if (vsi < 0 && cp->codec_type == AVMEDIA_TYPE_VIDEO) vsi = (int)i;
+			else if (asi < 0 && cp->codec_type == AVMEDIA_TYPE_AUDIO) asi = (int)i;
+		}
+		if (vsi < 0) break;
+		AVStream* vst = pFmt->streams[vsi];
+		AVCodecParameters* vcp = vst->codecpar;
+
+		// 容器格式名 (取 long_name 前的短名, 例 "mov,mp4,m4a,3gp,3g2,mj2" -> 取首段)
+		const char* fmtName = (pFmt->iformat && pFmt->iformat->name) ? pFmt->iformat->name : "";
+		{
+			const char* comma = strchr(fmtName, ',');
+			size_t n = comma ? (size_t)(comma - fmtName) : strlen(fmtName);
+			if (n >= 64) n = 63;
+			char tmp[64] = { 0 };
+			memcpy(tmp, fmtName, n);
+			::MultiByteToWideChar(CP_UTF8, 0, tmp, -1, pOutInfo->formatName, 64);
+		}
+
+		// 编码名
+		const char* vcodec = avcodec_get_name(vcp->codec_id);
+		if (vcodec) ::MultiByteToWideChar(CP_UTF8, 0, vcodec, -1, pOutInfo->videoCodec, 64);
+		if (asi >= 0){
+			const char* acodec = avcodec_get_name(pFmt->streams[asi]->codecpar->codec_id);
+			if (acodec) ::MultiByteToWideChar(CP_UTF8, 0, acodec, -1, pOutInfo->audioCodec, 64);
+			pOutInfo->hasAudio = 1;
+		}
+
+		// 尺寸
+		pOutInfo->width  = vcp->width;
+		pOutInfo->height = vcp->height;
+
+		// 时长
+		pOutInfo->durationSec = (pFmt->duration > 0) ? (double)pFmt->duration / (double)AV_TIME_BASE : 0.0;
+		// 比特率
+		pOutInfo->bitrate = pFmt->bit_rate;
+		// 帧率
+		AVRational fr = vst->avg_frame_rate;
+		if (fr.num > 0 && fr.den > 0) pOutInfo->fps = (double)fr.num / (double)fr.den;
+		// 帧数估算
+		if (pOutInfo->fps > 0.0 && pOutInfo->durationSec > 0.0){
+			pOutInfo->frameCount = (int64_t)(pOutInfo->fps * pOutInfo->durationSec);
+		}
+		// 文件大小 (本地文件) -- avio_size 也行, 这里直接 stat 防网络源阻塞.
+		{
+			WIN32_FILE_ATTRIBUTE_DATA fad;
+			if (::GetFileAttributesExW(pVideoPath, GetFileExInfoStandard, &fad) &&
+			    !(fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)){
+				LARGE_INTEGER li;
+				li.HighPart = (LONG)fad.nFileSizeHigh;
+				li.LowPart  = fad.nFileSizeLow;
+				pOutInfo->fileSize = li.QuadPart;
+			}
+		}
+
+		// 抓封面 (复用 GetVideoCover 的逻辑, 但不重复 open: 这里手动跑一次 grab + save).
+		wchar_t dirBuf[MAX_PATH] = { 0 };
+		if (GetVideoCacheDir(dirBuf, MAX_PATH)){
+			uint64_t hsh = _XVideoCover_HashPathW(pVideoPath);
+			wchar_t fullPath[MAX_PATH] = { 0 };
+			swprintf_s(fullPath, MAX_PATH, L"%s%016llx.png", dirBuf, (unsigned long long)hsh);
+
+			BOOL coverOk = FALSE;
+			if (::PathFileExistsW(fullPath)){
+				coverOk = TRUE;
+			} else {
+				std::vector<uint8_t> bgra;
+				int gw = 0, gh = 0;
+				if (_XVideoCover_GrabFrameBgra(pFmt, vsi, coverTimeSec, &bgra, &gw, &gh)){
+					coverOk = _XVideoCover_SaveBgraToPng(bgra.data(), gw, gh, fullPath);
+				}
+			}
+			if (coverOk){
+				wcscpy_s(pOutInfo->coverPath, fullPath);
+			}
+		}
+		ok = TRUE;
+	} while (0);
+	avformat_close_input(&pFmt);
+	return ok;
+}

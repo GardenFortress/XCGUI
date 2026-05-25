@@ -70,6 +70,24 @@ pVideo->Open(L"D:\\test.mp4");
 pVideo->Play();
 ```
 
+**静态工具: 元信息 + 封面抓取 (无需实例化播放器)**
+
+```cpp
+// 一次性拿到容器/编码/分辨率/时长/比特率/帧率/文件大小 + 封面 PNG (默认抓第 1 秒关键帧)
+XVideoInfo info{};
+if (CXVideo::GetVideoInfo(L"D:\\test.mp4", &info, 1.0)) {
+    // info.coverPath 已写入 PNG 路径 (默认 %TEMP%\xcgui_video_cover\<hash>.png)
+}
+
+// 仅取封面 (适合文件列表缩略图)
+wchar_t cover[260];
+CXVideo::GetVideoCover(L"D:\\test.mp4", NULL, 1.0, cover, 260);
+
+// 拿系统缓存目录 (用于批量清理)
+wchar_t dir[260];
+CXVideo::GetVideoCacheDir(dir, 260);
+```
+
 ### `CXImageEx`
 
 ```cpp
@@ -80,6 +98,24 @@ pImg->SetInterpolation(ximage_interp_lanczos);
 pImg->SetLoop(TRUE);
 pImg->LoadFromFile(L"D:\\test.avif");
 ```
+
+**句柄迁移 / 附加到已有元素 (生命周期受控)**
+
+```cpp
+// 把 CXImageEx 包装附加到外部已建好的 HELE (例如 layout 里现成的占位元素)
+CXImageEx* pImg = new CXImageEx();
+pImg->AttachToEle(hEle);          // 等价 *pImg = hEle
+pImg->LoadFromFile(L"D:\\a.gif");
+
+// 切到另一个元素 — 自动反注册旧事件 + 清 FFmpeg/D2D 资源, 再挂新句柄
+*pImg = hOtherEle;
+
+HELE h = pImg->GetEleHandle();    // 句柄只读访问 (m_hEle private)
+pImg->Detach();                   // 反附加, 包装可重新 Attach; HELE 由父级负责销毁
+```
+
+- `~CXImageEx` 为 `protected`: 必须 `new` 堆分配, 禁栈分配 / 外部 `delete`
+- HELE 销毁时 (`XE_DESTROY`) 自动 `delete this` 释放包装; 用户主动 `Detach` 后包装存活待重 Attach
 
 ### `CXBlur`
 
