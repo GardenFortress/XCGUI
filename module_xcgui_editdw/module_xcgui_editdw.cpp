@@ -3704,14 +3704,23 @@ int CXEditDW::OnPaintImpl(HELE /*hEle*/, HDRAW hDraw, BOOL* /*pbHandled*/){
 			ID2D1SolidColorBrush* pCaretBrush = NULL;
 			rt->CreateSolidColorBrush(RgbaToD2D(m_caretColor), &pCaretBrush);
 			if (pCaretBrush){
-				float caretX = originX + cx;
-				float caretY = originY + cy;
+				// 像素对齐: cx/cy 来自 HitTestTextPosition, 通常是分数 (例如 10.7).
+				// D2D 默认 PER_PRIMITIVE 反走样会把 1px 竖线摊到两列, 每列 alpha 减半,
+				// 视觉上 caret 变粗变灰 (即 "模糊"). floorf(x + 0.5) 四舍五入到整数像素,
+				// + 临时切 ALIASED 模式做双保险, 让 caret 在任何子像素位置都锐利.
+				float caretX = floorf(originX + cx + 0.5f);
+				float caretY = floorf(originY + cy + 0.5f);
 				// 插入符笔宽: m_caretWidth (逻辑) * m_dpiScale, 不少于 1px 以免高 DPI 下看不见.
 				float caretW = (float)m_caretWidth * m_dpiScale;
 				if (caretW < 1.0f) caretW = 1.0f;
+				caretW = floorf(caretW + 0.5f);
+				float caretH = floorf(ch + 0.5f);
+				D2D1_ANTIALIAS_MODE oldAA = rt->GetAntialiasMode();
+				rt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 				rt->FillRectangle(
-					D2D1::RectF(caretX, caretY, caretX + caretW, caretY + ch),
+					D2D1::RectF(caretX, caretY, caretX + caretW, caretY + caretH),
 					pCaretBrush);
+				rt->SetAntialiasMode(oldAA);
 				pCaretBrush->Release();
 			}
 		}
@@ -4461,7 +4470,11 @@ int CXEditDW::OnKeyDownImpl(HELE /*hEle*/, WPARAM wParam, LPARAM /*lParam*/, BOO
 		return 1;
 	case VK_RETURN:
 		if (m_readOnly) return 1;
-		if (m_multiLine){ const wchar_t kEol[] = L"\r\n"; InsertTextAtCursor(kEol, 2); }
+		// XCGUI 约定换行符为单 '\n'. 不能插 "\r\n":
+		// 本模块段切分 (ParaOnTextInserted / ParaRebuildFromText) *仅* 按 '\n' 切段,
+		// '\r' 会留在上一段文本里; 而 DirectWrite 的 IDWriteTextLayout 默认又把 '\r'
+		// 当成硬换行机会 -> 上一段 layout 内部再断一行, 视觉上一次 Enter 表现为两次换行.
+		if (m_multiLine){ const wchar_t kEol[] = L"\n"; InsertTextAtCursor(kEol, 1); }
 		return 1;
 	}
 	return 0;
