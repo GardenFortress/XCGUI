@@ -1,4 +1,4 @@
-﻿# XCGUI 模块扩展库
+# XCGUI 模块扩展库
 
 [炫彩界面库 (XCGUI)](https://www.xcgui.com) 的扩展模块集合. D2D 主路径 + GDI/GDI+ 兜底, 兼容 Windows 7 SP1+.
 
@@ -12,18 +12,19 @@
 | [`module_xcgui_blur`](./module_xcgui_blur/) | `CXBlur : CXEle` | DWM 亚克力 (`ACCENT_ACRYLIC`), 元素级 alpha 控制, per-corner 圆角 |
 | [`module_xcgui_shadow`](./module_xcgui_shadow/) | `CXShadow` | Win11 风格窗口外阴影 + AA 圆角描边 + 圆角内圈背景, DPI 自适应, 不占客户区 |
 | [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` | UI 工具集: 悬停气泡提示 (5 种语义 + 三角指针 + 渐显渐隐), 加载动画 (5 风格 + 元素/窗口附加) |
+| [`module_xcgui_chat`](./module_xcgui_chat/) | `CXChatBubbleBox : CXLayoutFrame` | 聊天气泡富文本对话框, 发送/接收消息, 头像/名称/标签, 系统/可点击消息, 数据保存恢复 |
 
 详细 API 见各 `.h` 文件中的 `//@别名` 注释.
 
 ## 兼容性
 
-| 系统 | editdw / image | video | blur | shadow | uitool |
-|---|---|---|---|---|---|
-| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **DComp+WUC** (`AttachToWndEx`) / `ACCENT_ACRYLIC` | D2D + GDI+ DIB | D2D |
-| Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB | D2D |
-| Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB | D2D |
-| Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB | D2D |
-| Win7 SP1 (VMware 默认) | GDI 降级 | GDI+ 降级 + 软解 | 装饰层 | GDI+ DIB | GDI+ 兜底 |
+| 系统 | editdw / image | video | blur | shadow | uitool | chat |
+|---|---|---|---|---|---|---|
+| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **DComp+WUC** (`AttachToWndEx`) / `ACCENT_ACRYLIC` | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
+| Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
+| Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
+| Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
+| Win7 SP1 (VMware 默认) | GDI 降级 | GDI+ 降级 + 软解 | 装饰层 | GDI+ DIB | GDI+ 兜底 | 依赖 `module_xcgui_editdw` 兜底能力 |
 
 > Win7 必须用 **FFmpeg 4.4.x**. 5.x+ 引入 Win8 API `WaitOnAddress`, 在 Win7 上加载即崩.
 
@@ -48,7 +49,8 @@ D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include*
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_editdw.h"          // 按需 include: editdw / video / image / blur / shadow / uitool
+#include "module_xcgui_editdw.h"          // chat 依赖 editdw
+#include "module_xcgui_chat.h"            // 按需 include: editdw / video / image / blur / shadow / uitool / chat
 
 XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
 ```
@@ -116,6 +118,52 @@ pImg->Detach();                   // 反附加, 包装可重新 Attach; HELE 由
 
 - `~CXImageEx` 为 `protected`: 必须 `new` 堆分配, 禁栈分配 / 外部 `delete`
 - HELE 销毁时 (`XE_DESTROY`) 自动 `delete this` 释放包装; 用户主动 `Detach` 后包装存活待重 Attach
+
+### `CXChatBubbleBox`
+
+聊天气泡富文本对话框, 基于 `CXLayoutFrame` + `CXEditDW` 封装. 支持发送者/接收者气泡、头像、名称、标签、系统消息、可点击消息、富文本内容、内嵌 UI 对象、点击回调、新消息定位提醒以及聊天数据保存/恢复.
+
+```cpp
+CXChatBubbleBox* pChat = new CXChatBubbleBox();
+pChat->Create(0, 0, 480, 600, hParent);
+pChat->EnableNewMessageLocate(TRUE);
+pChat->SetBubbleColor(RGB(0xC8, 0xE6, 0xC9), RGB(0xF5, 0xF5, 0xF5));
+pChat->SetBubbleRoundEx(8, 2, 8, 8);
+
+// 接收方消息
+pChat->SetInsertType(chat_insert_type_receiver);
+pChat->SetInsertUserInfo(L"u_alice", L"Alice", L"D:\\avatar\\alice.png");
+pChat->AddInsertTag(L"u_alice", L"VIP");
+pChat->InsertBubbleBegin();
+pChat->InsertText(L"你好, 这是一条普通文本消息");
+pChat->InsertImage(L"D:\\res\\sample.png");
+pChat->InsertBubbleEnd();
+
+// 发送方消息
+pChat->SetInsertType(chat_insert_type_sender);
+pChat->SetInsertUserInfo(L"u_me", L"我", L"D:\\avatar\\me.png");
+pChat->InsertBubbleBegin();
+pChat->InsertText(L"收到, 我也回一条");
+pChat->InsertBubbleEnd();
+```
+
+**事件与持久化**
+
+```cpp
+pChat->SetLButtonClickEvent(OnChatLClick);       // 头像 / 名称 / 标签 / 气泡 / 新消息按钮
+pChat->SetRButtonClickEvent(OnChatRClick);
+pChat->SetObjectLoadedEvent(OnChatObjectLoaded); // LoadFromMem / LoadFromFile 后重绑内嵌对象业务事件
+
+CXBytes bytes;
+pChat->SaveToMem(bytes);
+pChat->LoadFromMem(bytes.getPtr(), bytes.size());
+pChat->SaveToFile(L"D:\\chat\\session.bin");
+pChat->LoadFromFile(L"D:\\chat\\session.bin");
+```
+
+- `module_xcgui_chat` 依赖 `module_xcgui_editdw`, 工程中需同时加入 `module_xcgui_chat.h/.cpp` 与 `module_xcgui_editdw.h/.cpp`
+- 内容原子支持 `text` / `image` / `file` / `voice` / `video` / `object`; UI 对象可用 `InsertObjectEx(hObject, key)` 携带恢复标识
+- `demo.cpp` 覆盖样式、插入、事件、持久化、滚动定位、清空与销毁等完整接口示例
 
 ### `CXBlur`
 
