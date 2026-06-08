@@ -11,7 +11,7 @@
 | [`module_xcgui_image`](./module_xcgui_image/) | `CXImageEx : CXEle` | FFmpeg 图片元素, 静/动态 jpg/png/webp/heic/avif/gif/apng 等 |
 | [`module_xcgui_blur`](./module_xcgui_blur/) | `CXBlur : CXEle` | DWM 亚克力 (`ACCENT_ACRYLIC`), 元素级 alpha 控制, per-corner 圆角 |
 | [`module_xcgui_shadow`](./module_xcgui_shadow/) | `CXShadow` | Win11 风格窗口外阴影 + AA 圆角描边 + 圆角内圈背景, DPI 自适应, 不占客户区 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` | UI 工具集: 悬停气泡提示 (5 种语义 + 三角指针 + 渐显渐隐), 加载动画 (5 风格 + 元素/窗口附加) |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` | UI 工具集: 悬停气泡提示, 加载动画, 单月历日期选择与双月历范围选择 |
 | [`module_xcgui_chat`](./module_xcgui_chat/) | `CXChatBubbleBox : CXLayoutFrame` | 聊天气泡富文本对话框, 发送/接收消息, 头像/名称/标签, 系统/可点击消息, 数据保存恢复 |
 
 详细 API 见各 `.h` 文件中的 `//@别名` 注释.
@@ -50,13 +50,13 @@ D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include*
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
 #include "module_xcgui_editdw.h"          // chat 依赖 editdw
-#include "module_xcgui_uitool.h"          // tooltip / loading UI 工具
+#include "module_xcgui_uitool.h"          // tooltip / loading / calendar UI 工具
 #include "module_xcgui_chat.h"            // 按需 include: editdw / video / image / blur / shadow / uitool / chat
 
 XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
 ```
 
-`module_xcgui_uitool` 由 `module_xcgui_uitool.h` / `module_xcgui_uitool.cpp` / `module_xcgui_uitool_svgs.inc` 组成; `.cpp` 会包含 `.inc` 中的内置 SVG 图标资源, 工程中加入 `.h/.cpp` 并保持 `.inc` 同目录即可.
+`module_xcgui_uitool` 由 `module_xcgui_uitool.h` / `module_xcgui_uitool.cpp` / `module_xcgui_uitool_svgs.inc` 三个文件组成; `.cpp` 会包含 `.inc` 中的内置 SVG 图标资源, 工程中加入 `.h/.cpp` 并保持 `.inc` 同目录即可.
 
 ### `CXEditDW`
 
@@ -283,6 +283,32 @@ CXLoading::SetAccentColor  (hLoad, RGB(0xFF, 0x99, 0x00));
 - GDI+ 兜底自动启用 (`XInitXCGUI(FALSE)` 或低端机), 笔画宽手动 ×dpi 物理化, cap 圆直径与笔画严格等宽
 - `Stop` 对自建元素 (`Create` / `AttachWnd`) 走 `XWidget_Show(FALSE)`, 对外部元素 (`AttachEle`) 走让出 paint
 - 元素/窗口销毁时自动释放 entry (无需显式 `Detach`); 进程退出前调 `CXLoading::Cleanup()` 兜底
+
+### `CXCalendarCard`
+
+日期 / 日期范围选择卡片 — 全 static API, 支持单个月历选日期与双个月历选范围.
+
+```cpp
+// 单日期选择: 可绑定到按钮 / 输入框附近弹出
+xcalendar_datetime_ date = CXCalendarCard::GetToday();
+CXCalendarCard::SetBindEle(hDateBtn, 0, 6);
+if (CXCalendarCard::PopupSingle(hWnd, &date, TRUE, xcalendar_theme_auto)) {
+    XEdit_SetText(hEdit, CXCalendarCard::FormatShortDatePtr(date));
+}
+
+// 日期时间范围选择: 默认限制最大日期为今天
+xcalendar_datetime_ start = CXCalendarCard::GetToday();
+xcalendar_datetime_ end = start;
+if (CXCalendarCard::PopupDouble(hWnd, &start, &end, TRUE, xcalendar_theme_light)) {
+    const wchar_t* beginText = CXCalendarCard::FormatDateTimePtr(start);
+    // start / end 已更新为用户确认的范围
+}
+```
+
+- `PopupSingle` 取消返回 `FALSE`, 确认后把选择结果写回 `pDate`
+- `PopupDouble` 支持今天 / 近7天 / 近15天 / 近30天快捷范围
+- `SetBindEle` / `SetPopupPosition` 控制下一次弹出位置, 超出屏幕会自动调整
+- 主题支持 `xcalendar_theme_dark` / `xcalendar_theme_light` / `xcalendar_theme_auto`
 
 ## ⚠️ `CXBlur::ForceSystemTransparencyOn` 修改注册表
 

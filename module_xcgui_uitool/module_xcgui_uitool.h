@@ -30,6 +30,12 @@
 //            - 背景圆角支持统一/4 角分别 (扩展版本, CSS 顺序).
 //            - 多种 ease (cubic-in-out / cubic-out / sine) 衍生自 CSS 标准.
 //            - 元素/窗口销毁时自动释放, 共享 timer 心跳.
+//
+//          [3] CXCalendarCard — 日期 / 日期范围选择卡片
+//            - PopupSingle 单个月历选择日期; PopupDouble 双个月历选择范围.
+//            - 默认限制最大可选日期为今天, 也可指定最大日期或关闭限制.
+//            - 双月范围支持今天 / 近7天 / 近15天 / 近30天快捷选择.
+//            - 弹窗使用 window_transparent_shaped, 自绘圆角背景与柔和阴影.
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -55,6 +61,7 @@
 //@隐藏{
 class CXTooltip;
 class CXLoading;
+class CXCalendarCard;
 //@隐藏}
 
 ///<Tooltip 类型: 决定左侧图标 (default = 无图标, 1~4 = 对应 SVG)
@@ -657,6 +664,130 @@ public:
 //@备注 全局清理: 停所有 timer, 清空注册表.
 //@别名  清理()
 	static void Cleanup();
+};
+//@分组}
+
+// =====================================================================
+// CXCalendarCard — 日期 / 日期范围选择卡片
+// =====================================================================
+
+///<月历卡片颜色主题
+//@别名 月历卡片主题
+enum xcalendar_theme_
+{
+	//@别名 月历卡片主题_深色
+	xcalendar_theme_dark  = 0,   ///<深色主题
+	//@别名 月历卡片主题_浅色
+	xcalendar_theme_light = 1,   ///<浅色主题
+	//@别名 月历卡片主题_自动
+	xcalendar_theme_auto  = 2,   ///<跟随系统 light/dark
+};
+
+///<月历卡片日期时间结构
+//@别名 月历日期时间
+struct xcalendar_datetime_
+{
+	//@别名 年
+	int year;    ///<年
+	//@别名 月
+	int month;   ///<月, 1-12
+	//@别名 日
+	int day;     ///<日, 1-31
+	//@别名 时
+	int hour;    ///<时, 0-23
+	//@别名 分
+	int minute;  ///<分, 0-59
+	//@别名 秒
+	int second;  ///<秒, 0-59
+};
+
+//@分组{ 月历卡片
+//@备注  日期 / 日期范围选择卡片工具类, 全静态方法. PopupSingle 弹出单个月历,
+//       PopupDouble 弹出双个月历范围选择; 默认选中今天, 可限制最大可选日期
+//       (默认限制到今天), 双月范围支持今天 / 近7天 / 近15天 / 近30天快捷选择,
+//       并可通过输入框和上下调节按钮修改年月日时分秒. 弹窗带确认和取消按钮,
+//       支持深色 / 浅色 / 跟随系统主题.
+//@别名  炫彩月历卡片类
+class CXCalendarCard
+{
+public:
+
+	// ===== 日期工具 =====
+
+//@备注 获取本机当前日期时间.
+//@返回 当前日期时间
+//@别名  取今天()
+	static xcalendar_datetime_ GetToday();
+
+//@备注 格式化为完整日期时间: YYYY-MM-DD HH:MM:SS.
+//@参数 date 日期时间
+//@返回 格式化文本
+//@别名  格式化日期时间()
+	static CXText FormatDateTime(xcalendar_datetime_ date);
+
+//@备注 格式化为短日期: YY/MM/DD, 适合单月历选择结果.
+//@参数 date 日期时间
+//@返回 格式化文本
+//@别名  格式化短日期()
+	static CXText FormatShortDate(xcalendar_datetime_ date);
+
+//@备注 格式化为短日期: YY/MM/DD, 返回临时 const wchar_t* 指针; 下次调用会覆盖.
+//@参数 date 日期时间
+//@返回 临时文本指针
+//@别名  格式化短日期指针()
+	static const wchar_t* FormatShortDatePtr(xcalendar_datetime_ date);
+
+//@备注 格式化为完整日期时间: YYYY-MM-DD HH:MM:SS, 返回临时 const wchar_t* 指针; 下次调用会覆盖.
+//@参数 date 日期时间
+//@返回 临时文本指针
+//@别名  格式化日期时间指针()
+	static const wchar_t* FormatDateTimePtr(xcalendar_datetime_ date);
+
+	// ===== 弹出选择 =====
+
+//@备注 设置下一次月历弹出的绑定元素位置. PopupSingle/PopupDouble 会以元素左下角为基准弹出,
+//       并叠加 offsetX/offsetY; 超出屏幕时自动调整到屏幕内.
+//@参数 hEle 绑定元素句柄
+//@参数 offsetX 横向偏移
+//@参数 offsetY 纵向偏移
+//@别名  置绑定元素()
+	static void SetBindEle(HELE hEle, int offsetX = 0, int offsetY = 0);
+
+//@备注 设置下一次月历弹出的屏幕坐标位置. PopupSingle/PopupDouble 会直接按该 POINT 弹出,
+//       超出屏幕时自动调整到屏幕内.
+//@参数 pt 屏幕坐标
+//@别名  置弹出位置()
+	static void SetPopupPosition(POINT pt);
+
+//@备注 弹出单个月历日期选择卡片. pDate 为 NULL 或 year<=0 时默认选中今天; 取消返回 FALSE.
+//       bLimitMaxDate=TRUE 时禁止选择 pMaxDate 之后的日期; pMaxDate=NULL 表示限制到今天.
+//@参数 hParent 父窗口句柄, 可为 NULL
+//@参数 pDate 输入初始日期并接收选择结果
+//@参数 bLimitMaxDate 是否启用最大日期限制
+//@参数 theme 主题
+//@参数 pMaxDate 最大可选日期, NULL 表示今天
+//@参数 nCornerRadius 弹窗圆角大小
+//@返回 确认 TRUE, 取消 FALSE
+//@别名  弹出单月历()
+	static BOOL PopupSingle(HWINDOW hParent, xcalendar_datetime_* pDate,
+		BOOL bLimitMaxDate = FALSE, xcalendar_theme_ theme = xcalendar_theme_auto,
+		const xcalendar_datetime_* pMaxDate = NULL, int nCornerRadius = 8);
+
+//@备注 弹出双个月历日期范围选择卡片. pStart/pEnd 为 NULL 或 year<=0 时默认今天
+//       00:00:00 到 23:59:59; 取消返回 FALSE. bLimitMaxDate=TRUE 时禁止选择
+//       pMaxDate 之后的日期; pMaxDate=NULL 表示限制到今天.
+//@参数 hParent 父窗口句柄, 可为 NULL
+//@参数 pStart 输入起始时间并接收结果
+//@参数 pEnd 输入结束时间并接收结果
+//@参数 bLimitMaxDate 是否启用最大日期限制
+//@参数 theme 主题
+//@参数 pMaxDate 最大可选日期, NULL 表示今天
+//@参数 nCornerRadius 弹窗圆角大小
+//@返回 确认 TRUE, 取消 FALSE
+//@别名  弹出双月历()
+	static BOOL PopupDouble(HWINDOW hParent, xcalendar_datetime_* pStart, xcalendar_datetime_* pEnd,
+		BOOL bLimitMaxDate = TRUE, xcalendar_theme_ theme = xcalendar_theme_auto,
+		const xcalendar_datetime_* pMaxDate = NULL, int nCornerRadius = 8);
 };
 //@分组}
 
