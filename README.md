@@ -50,10 +50,13 @@ D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include*
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
 #include "module_xcgui_editdw.h"          // chat 依赖 editdw
+#include "module_xcgui_uitool.h"          // tooltip / loading UI 工具
 #include "module_xcgui_chat.h"            // 按需 include: editdw / video / image / blur / shadow / uitool / chat
 
 XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
 ```
+
+`module_xcgui_uitool` 由 `module_xcgui_uitool.h` / `module_xcgui_uitool.cpp` / `module_xcgui_uitool_svgs.inc` 组成; `.cpp` 会包含 `.inc` 中的内置 SVG 图标资源, 工程中加入 `.h/.cpp` 并保持 `.inc` 同目录即可.
 
 ### `CXEditDW`
 
