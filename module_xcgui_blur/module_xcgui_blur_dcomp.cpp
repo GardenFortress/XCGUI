@@ -67,14 +67,45 @@ HWND  WINAPI XWnd_GetHWND(HWINDOW hWindow);
 #include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 
-#pragma comment(lib, "windowsapp.lib")
-#pragma comment(lib, "coremessaging.lib")
-#pragma comment(lib, "dcomp.lib")
+//#pragma comment(lib, "windowsapp.lib")
+//#pragma comment(lib, "coremessaging.lib")
+//#pragma comment(lib, "dcomp.lib")
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
+
+#pragma comment(lib, "delayimp.lib")
+
+// ============================================================================
+// Windows 7 兼容性火墙：延迟加载 Win8/Win10 特专属 DLL 与 API 接口集
+// ============================================================================
+
+// 1. WinRT 核心基础服务 (激活、类工厂等，Win8+)
+#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll")
+
+// 2. HSTRING 字符串处理 (C++/WinRT 传递参数必用，Win8+)
+#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-string-l1-1-0.dll")
+
+// 3. WinRT 错误处理与报告 (Win8+/Win10)
+#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-error-l1-1-0.dll")
+#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-error-l1-1-1.dll")
+
+// 4. 参数化接口 IID 生成器 (C++/WinRT 模板/泛型实例化时依赖，Win10)
+#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-roparameterizediid-l1-1-0.dll")
+
+// 5. COM 核心基础 (WinRT 底层映射的核心库，Win8+)
+#pragma comment(linker, "/DELAYLOAD:combase.dll")
+
+// 6. 现代 DPI 与缩放管理 (Win8.1+)
+#pragma comment(linker, "/DELAYLOAD:shcore.dll")
+
+// 7. 直接合成核心库 (DirectComposition 运行时，Win8+)
+#pragma comment(linker, "/DELAYLOAD:dcomp.dll")
+
+// 8. 现代消息调度通道 (DispatcherQueue 运行依赖，Win10)
+#pragma comment(linker, "/DELAYLOAD:CoreMessaging.dll")
 
 namespace ABI_GE = ABI::Windows::Graphics::Effects;
 namespace WGE    = winrt::Windows::Graphics::Effects;
@@ -416,9 +447,19 @@ static bool EnsureDispatcherQueue_Locked() {
     opts.dwSize        = sizeof(opts);
     opts.threadType    = DQTYPE_THREAD_CURRENT;
     opts.apartmentType = DQTAT_COM_NONE;
+
+    // --- 修改开始：动态加载 CoreMessaging.dll 以兼容 Windows 7 ---
+    typedef HRESULT(WINAPI* PFN_CreateDispatcherQueueController)(DispatcherQueueOptions, ABI::Windows::System::IDispatcherQueueController**);
+    static HMODULE hCoreMessaging = ::LoadLibraryW(L"CoreMessaging.dll");
+    if (!hCoreMessaging) return false;
+
+    static auto pfnCreate = (PFN_CreateDispatcherQueueController)::GetProcAddress(hCoreMessaging, "CreateDispatcherQueueController");
+    if (!pfnCreate) return false;
+
     ABI::Windows::System::IDispatcherQueueController* raw = nullptr;
-    HRESULT hr = ::CreateDispatcherQueueController(opts,
-        reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(&raw));
+    HRESULT hr = pfnCreate(opts, reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(&raw));
+    // --- 修改结束 ---
+
     if (FAILED(hr)) return false;
     winrt::Windows::System::DispatcherQueueController dq{nullptr};
     winrt::copy_from_abi(dq, raw);
@@ -980,7 +1021,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 	HWND xcguiHwnd = ::XWnd_GetHWND(hWnd);
 	if (!xcguiHwnd) return NULL;
 
-	// 1. 注册 acrylic backdrop 窗口类 (无 wndproc, DefWindowProc 处理一切, 它是被动 backdrop).
+	// 1. 注册 acrylic backdrop 窗口类
 	static const wchar_t* kAcCls = L"XBlurAcrylicBackdrop_PoC";
 	static std::atomic<bool> sClsRegistered{false};
 	if (!sClsRegistered.exchange(true)){
@@ -993,10 +1034,17 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		::RegisterClassW(&wc);
 	}
 
-	// 2. 创建 acrylic backdrop, 外扩 kAcrylicOuterPx 让 acrylic 系统描边露在 XCGUI 边外.
-	//    显式 SetThreadDpiAwarenessContext(PMv2) 保证 acrylic 是 PMv2 → 才会收 WM_DPICHANGED.
-	DPI_AWARENESS_CONTEXT prevDpiCtx =
-		::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	// 2. 创建 acrylic backdrop
+	// --- 修改开始：动态调用 SetThreadDpiAwarenessContext 兼容 Win7 ---
+	typedef DPI_AWARENESS_CONTEXT(WINAPI* PFN_SetThreadDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+	static auto pfnSetThreadDpiAwarenessContext = (PFN_SetThreadDpiAwarenessContext)
+		::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "SetThreadDpiAwarenessContext");
+
+	DPI_AWARENESS_CONTEXT prevDpiCtx = NULL;
+	if (pfnSetThreadDpiAwarenessContext) {
+		prevDpiCtx = pfnSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	}
+
 	RECT xcRect; ::GetWindowRect(xcguiHwnd, &xcRect);
 	s_acrylicBackdrop = ::CreateWindowExW(
 		WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -1006,7 +1054,10 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		(xcRect.right - xcRect.left) + 2 * kAcrylicOuterPx,
 		(xcRect.bottom - xcRect.top) + 2 * kAcrylicOuterPx,
 		NULL, NULL, GetModuleHandleW(NULL), NULL);
-	::SetThreadDpiAwarenessContext(prevDpiCtx);
+
+	if (pfnSetThreadDpiAwarenessContext && prevDpiCtx) {
+		pfnSetThreadDpiAwarenessContext(prevDpiCtx);
+	}
 	if (!s_acrylicBackdrop) return NULL;
 
 	// 3. 装 PoC dark effect on acrylic backdrop.
