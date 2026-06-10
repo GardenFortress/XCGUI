@@ -1334,12 +1334,12 @@ constexpr int  kLoad_TextGap      = 8;            // 动画与下方文本的间
 constexpr int  kLoad_TextFontPt   = 9;
 
 // 主题色 (XCGUI ARGB)
-constexpr COLORREF kLoad_DarkText    = ((COLORREF)0xFF << 24) | (0xF5 << 16) | (0xF5 << 8) | 0xF5;
-constexpr COLORREF kLoad_DarkBg      = ((COLORREF)0xFF << 24) | (0x17 << 16) | (0x17 << 8) | 0x17;
-constexpr COLORREF kLoad_DarkAccent  = ((COLORREF)0xFF << 24) | (0xFF << 16) | (0xFF << 8) | 0xFF;
-constexpr COLORREF kLoad_LightText   = ((COLORREF)0xFF << 24) | (0x17 << 16) | (0x17 << 8) | 0x17;
-constexpr COLORREF kLoad_LightBg     = ((COLORREF)0xFF << 24) | (0xFF << 16) | (0xFF << 8) | 0xFF;
-constexpr COLORREF kLoad_LightAccent = ((COLORREF)0xFF << 24) | (0x17 << 16) | (0x17 << 8) | 0x17;
+constexpr COLORREF kLoad_DarkText    = RGBA(245, 245, 245, 255);
+constexpr COLORREF kLoad_DarkBg      = RGBA(23, 23, 23, 255);
+constexpr COLORREF kLoad_DarkAccent  = RGBA(255, 255, 255, 255);
+constexpr COLORREF kLoad_LightText   = RGBA(23, 23, 23, 255);
+constexpr COLORREF kLoad_LightBg     = RGBA(255, 255, 255, 255);
+constexpr COLORREF kLoad_LightAccent = RGBA(23, 23, 23, 255);
 
 constexpr float kLoad_Pi = 3.14159265358979323846f;
 
@@ -2186,7 +2186,20 @@ BOOL CXLoading::AttachWnd(HWINDOW hWnd)
 	if (g.userToHost.find((HXCGUI)hWnd) != g.userToHost.end()){
 		Detach((HXCGUI)hWnd);
 	}
-
+	
+	_XLoad_Entry oldConfig;
+    BOOL hasOldConfig = FALSE;
+    auto itOld = g.registry.find((HXCGUI)hWnd);
+    if(itOld != g.registry.end()){
+        oldConfig = itOld->second;
+        hasOldConfig = TRUE;
+        // 移除挂在 hWnd 上的空壳事件
+        XWnd_RemoveEventC(hWnd, XE_PAINT,    (void*)&_XLoad_OnPaint);
+        XWnd_RemoveEventC(hWnd, XE_XC_TIMER, (void*)&_XLoad_OnTimer);
+        XWnd_RemoveEventC(hWnd, XE_DESTROY,  (void*)&_XLoad_OnDestroy);
+        g.registry.erase(itOld);
+    }
+	
 	// 客户区减内填充 — 用户也可能 XWnd_SetPadding 留出标题栏/工具栏区不被遮.
 	RECT rcCli{};
 	XWnd_GetClientRect(hWnd, &rcCli);
@@ -2217,6 +2230,28 @@ BOOL CXLoading::AttachWnd(HWINDOW hWnd)
 		XEle_Destroy(hEle);
 		return FALSE;
 	}
+	
+	if (hasOldConfig) {
+		p->style        = oldConfig.style;
+		p->theme        = oldConfig.theme;     // 完美继承你的 light / auto 主题
+		p->sizeCx       = oldConfig.sizeCx;
+		p->sizeCy       = oldConfig.sizeCy;
+		p->text         = oldConfig.text;
+		p->customText   = oldConfig.customText;
+		p->customBg     = oldConfig.customBg;
+		p->customAccent = oldConfig.customAccent;
+		p->cornerLT     = oldConfig.cornerLT;
+		p->cornerRT     = oldConfig.cornerRT;
+		p->cornerRB     = oldConfig.cornerRB;
+		p->cornerLB     = oldConfig.cornerLB;
+		p->speed        = oldConfig.speed;
+		p->fontPt       = oldConfig.fontPt;
+		if (oldConfig.hFont) {
+			p->hFont = oldConfig.hFont;
+			oldConfig.hFont = NULL; // 防止旧字体句柄泄漏
+		}
+    }
+	
 	p->ownEle     = TRUE;                        // 我们建的 → Stop 隐藏, Detach 销毁
 	p->hUserAlias = (HXCGUI)hWnd;                // 同时兼任"Detach 时销毁子 HELE"标志
 	p->running    = TRUE;
@@ -2379,6 +2414,7 @@ BOOL CXLoading::SetTheme(HXCGUI hHost, xloading_theme_ theme)
 	auto* p = _XLoad_GetOrCreate(hHost);
 	if (!p) return FALSE;
 	p->theme = theme;
+	_XLoad_Redraw(p->hHost);
 	return TRUE;
 }
 xloading_theme_ CXLoading::GetTheme(HXCGUI hHost)
@@ -2389,11 +2425,19 @@ xloading_theme_ CXLoading::GetTheme(HXCGUI hHost)
 
 BOOL CXLoading::SetTextColor(HXCGUI hHost, COLORREF color)
 {
-	auto* p = _XLoad_GetOrCreate(hHost);
-	if (!p) return FALSE;
-	p->customText = color;
-	p->theme      = xloading_theme_custom;
-	return TRUE;
+    auto* p = _XLoad_GetOrCreate(hHost);
+    if (!p) return FALSE;
+    // 切换到 custom 前，先继承当前主题的其它颜色，防止变白/变黑
+    if (p->theme != xloading_theme_custom) {
+        _XLoad_Colors c;
+        _XLoad_ResolveColors(*p, &c);
+        p->customBg = c.bg;
+        p->customAccent = c.accent;
+    }
+    p->customText = color;
+    p->theme      = xloading_theme_custom;
+    _XLoad_Redraw(p->hHost);
+    return TRUE;
 }
 COLORREF CXLoading::GetTextColor(HXCGUI hHost)
 {
@@ -2406,11 +2450,18 @@ COLORREF CXLoading::GetTextColor(HXCGUI hHost)
 
 BOOL CXLoading::SetBkColor(HXCGUI hHost, COLORREF color)
 {
-	auto* p = _XLoad_GetOrCreate(hHost);
-	if (!p) return FALSE;
-	p->customBg = color;
-	p->theme    = xloading_theme_custom;
-	return TRUE;
+    auto* p = _XLoad_GetOrCreate(hHost);
+    if (!p) return FALSE;
+    if (p->theme != xloading_theme_custom) {
+        _XLoad_Colors c;
+        _XLoad_ResolveColors(*p, &c);
+        p->customText = c.text;
+        p->customAccent = c.accent;
+    }
+    p->customBg = color;
+    p->theme    = xloading_theme_custom;
+    _XLoad_Redraw(p->hHost);
+    return TRUE;
 }
 COLORREF CXLoading::GetBkColor(HXCGUI hHost)
 {
@@ -2423,11 +2474,18 @@ COLORREF CXLoading::GetBkColor(HXCGUI hHost)
 
 BOOL CXLoading::SetAccentColor(HXCGUI hHost, COLORREF color)
 {
-	auto* p = _XLoad_GetOrCreate(hHost);
-	if (!p) return FALSE;
-	p->customAccent = color;
-	p->theme        = xloading_theme_custom;
-	return TRUE;
+    auto* p = _XLoad_GetOrCreate(hHost);
+    if (!p) return FALSE;
+    if (p->theme != xloading_theme_custom) {
+        _XLoad_Colors c;
+        _XLoad_ResolveColors(*p, &c);
+        p->customText = c.text;
+        p->customBg = c.bg;
+    }
+    p->customAccent = color;
+    p->theme        = xloading_theme_custom;
+    _XLoad_Redraw(p->hHost);
+    return TRUE;
 }
 COLORREF CXLoading::GetAccentColor(HXCGUI hHost)
 {
