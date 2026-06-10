@@ -399,7 +399,7 @@ public:
 enum xloading_style_
 {
 	//@别名 加载样式_圆环
-	xloading_style_spinner  = 0,   ///<旋转圆环 + 弧长缓动 (Material Snake), 默认
+	xloading_style_spinner  = 0,   ///<无缝 indeterminate 圆环 (grow/shrink snake, 1.5s 单周期), 默认
 	//@别名 加载样式_跳点
 	xloading_style_dots     = 1,   ///<3 个上下跳动的点, 正弦缓动
 	//@别名 加载样式_辐条

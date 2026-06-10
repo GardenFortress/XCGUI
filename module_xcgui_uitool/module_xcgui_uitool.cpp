@@ -1318,7 +1318,7 @@ void CXTooltip::Cleanup()
 //   - 所有几何/动画用元素的 *逻辑* 像素 (与 module_xcgui_video 经验一致, hDraw
 //     在 D2D 主路径下接受逻辑坐标, XCGUI 内部按 DPI 缩到物理).
 //   - 5 种动画 ease 算法:
-//       spinner: ease-in-out cubic (弧长振荡)
+//       spinner: 单周期 seamless snake (grow/shrink + 720° 补偿, ease-in-out)
 //       dots:    sin (正弦跳动)
 //       spokes:  阶梯 (经典 beachball)
 //       pulse:   ease-out cubic (扩散)
@@ -1342,6 +1342,14 @@ constexpr COLORREF kLoad_LightBg     = RGBA(255, 255, 255, 255);
 constexpr COLORREF kLoad_LightAccent = RGBA(23, 23, 23, 255);
 
 constexpr float kLoad_Pi = 3.14159265358979323846f;
+
+// 无缝 indeterminate spinner — 单时间轴 snake (非 SMIL dash 双通道)
+// 几何参考 SVG viewBox 24 (r=9.5, stroke=3); 动画为 grow/shrink + baseRot 720° 闭环
+constexpr float kLoad_Spinner_MinArcDeg  = 24.0f;
+constexpr float kLoad_Spinner_MaxArcDeg  = 42.0f / (2.0f * kLoad_Pi * 9.5f) * 360.0f;  // ≈253.3°
+constexpr float kLoad_Spinner_StrokeRat  = 0.125f;                        // 3/24
+constexpr float kLoad_Spinner_RadiusRat  = 9.5f / 24.0f;
+constexpr float kLoad_Spinner_SweepEps   = 0.01f;
 
 //============================================================================
 // 注册项
@@ -1625,77 +1633,65 @@ ID2D1StrokeStyle* _XLoad_MakeRoundStroke(ID2D1Factory* fac){
 	return s;
 }
 
-// 1) Material Design 风格的不定进度 Spinner — daisyUI / MUI / 系统 InProgress 同款.
-//    *两个* 同步动画叠加, 产生"游动的弧"质感:
-//      A) 整体匀速旋转  (linear)
-//      B) 弧长在 minArc <-> maxArc 之间 ease-in-out 振荡
-//    阶段 A (tNorm<0.5): 尾固定, 头 ease-in-out 拉开 → 弧从 minArc 长到 maxArc.
-//    阶段 B (tNorm>=0.5): 头固定, 尾 ease-in-out 追上 → 弧从 maxArc 缩到 minArc.
-//
-//    无缝循环数学:
-//      令 baseRot = 每周期 tail 累计推进度, arcDelta = maxArc - minArc.
-//      一周期内 tail 推进 baseRot + arcDelta, head 推进 baseRot + arcDelta.
-//      取 baseRot = 720 - arcDelta → 推进量 = 720 (= 2 * 360), 跨周期角度位置 mod 360
-//      自然对齐, 无视觉跳变.
-//
-//    Rendering (D2D 主路径):
-//      ID2D1PathGeometry + AddArc + DrawGeometry(stroke=round-cap) → 端帽与笔画
-//      天然对齐, sub-pixel 精度, DPI 任意倍率干净.
-//
-//    Rendering (GDI+ 兜底):
-//      XDraw_DrawArcF 主体 + XDraw_FillEllipseF 模拟端帽. cap 直径必须 *等于*
-//      笔画物理宽 (不能 +1), 否则视觉端帽比笔画粗.
+// 无缝 indeterminate spinner — 单周期 snake:
+//   tNorm<0.5: 尾端固定, 头端拉开 (minArc→maxArc), 整体随 baseRot·tNorm 旋转
+//   tNorm≥0.5: 头端固定, 尾端追上 (maxArc→minArc), start 追加 (maxArc-arcLen)
+//   baseRot = 720° - (maxArc-minArc), 保证 tNorm=0/1 时 start+sweep 视觉同态, 无硬切
+struct _XLoad_SpinnerPhase{
+	float startDeg;
+	float sweepDeg;
+};
+
+void _XLoad_ComputeSpinnerPhase(float tNorm, _XLoad_SpinnerPhase* out)
+{
+	const float minArc  = kLoad_Spinner_MinArcDeg;
+	const float maxArc  = kLoad_Spinner_MaxArcDeg;
+	const float arcDelta = maxArc - minArc;
+	const float baseRot  = 720.0f - arcDelta;
+
+	float arcLen, arcStart;
+	if (tNorm < 0.5f){
+		float u = _XLoad_EaseInOutCubic(tNorm * 2.0f);
+		arcLen   = minArc + arcDelta * u;
+		arcStart = -90.0f + baseRot * tNorm;
+	} else {
+		float u = _XLoad_EaseInOutCubic((tNorm - 0.5f) * 2.0f);
+		arcLen   = maxArc - arcDelta * u;
+		arcStart = -90.0f + baseRot * tNorm + (maxArc - arcLen);
+	}
+	out->startDeg = arcStart;
+	out->sweepDeg = arcLen;
+}
+
 void _XLoad_PaintSpinner(const _XLoad_PaintCtx& ctx, float tNorm, COLORREF accent)
 {
-	// 几何 — 全部物理像素.
-	float strokeLog  = (ctx.sizePhys / ctx.dpiScale / 10.0f);
+	_XLoad_SpinnerPhase ph{};
+	_XLoad_ComputeSpinnerPhase(tNorm, &ph);
+	if (ph.sweepDeg <= kLoad_Spinner_SweepEps) return;
+
+	// 几何 — SVG 比例 (stroke 12.5%, 中心线半径 9.5/24).
+	float sizeLog  = ctx.sizePhys / ctx.dpiScale;
+	float strokeLog = sizeLog * kLoad_Spinner_StrokeRat;
 	if (strokeLog < 2.0f) strokeLog = 2.0f;
 	float strokePhys = floorf(strokeLog * ctx.dpiScale + 0.5f);
 	if (strokePhys < 1.0f) strokePhys = 1.0f;
-	float rPhys = (ctx.sizePhys - strokePhys) * 0.5f;     // 笔画 centerline 半径
-	if (rPhys < 1.0f) rPhys = 1.0f;
+	float rPhys = ctx.sizePhys * kLoad_Spinner_RadiusRat;
+	if (rPhys < strokePhys * 0.5f) rPhys = strokePhys * 0.5f;
 
-	// Material 风双动画
-	constexpr float minArc   = 24.0f;
-	constexpr float maxArc   = 280.0f;
-	constexpr float arcDelta = maxArc - minArc;            // 256
-	constexpr float baseRot  = 720.0f - arcDelta;          // 464 → 周期推进 720, 无缝
-	float arcLen, arcStart;
-	if (tNorm < 0.5f){
-		float u = tNorm * 2.0f;
-		float e = _XLoad_EaseInOutCubic(u);
-		arcLen   = minArc + arcDelta * e;
-		arcStart = tNorm * baseRot;                        // tail 匀速推进 (u 与 t 线性)
-	} else {
-		float u = (tNorm - 0.5f) * 2.0f;
-		float e = _XLoad_EaseInOutCubic(u);
-		arcLen   = maxArc - arcDelta * e;
-		arcStart = tNorm * baseRot + arcDelta * e;         // tail 在 ease 加速段追头
-	}
-
-	// Track + 主弧 端点 (12 点钟方向起算 → -90° 偏移).
-	float startDeg = arcStart - 90.0f;
-	float sweepDeg = arcLen;
-	float startRad = startDeg            * (kLoad_Pi / 180.0f);
-	float endRad   = (startDeg + sweepDeg)* (kLoad_Pi / 180.0f);
+	float startDeg = ph.startDeg;
+	float sweepDeg = ph.sweepDeg;
+	float startRad = startDeg             * (kLoad_Pi / 180.0f);
+	float endRad   = (startDeg + sweepDeg) * (kLoad_Pi / 180.0f);
 
 	if (ctx.rt){
-		// ---------- D2D 主路径 ----------
 		ID2D1Factory* fac = NULL;
 		ctx.rt->GetFactory(&fac);
 		if (!fac) return;
 
 		ID2D1StrokeStyle* roundStroke = _XLoad_MakeRoundStroke(fac);
 		ID2D1SolidColorBrush* brush = NULL;
-		ctx.rt->CreateSolidColorBrush(_XLoad_ToColorF(accent, 45), &brush);
+		ctx.rt->CreateSolidColorBrush(_XLoad_ToColorF(accent, 255), &brush);
 		if (brush){
-			// L1: 完整圆环 track (半透明)
-			D2D1_ELLIPSE el = D2D1::Ellipse(
-				D2D1::Point2F(ctx.cxPhys, ctx.cyPhys), rPhys, rPhys);
-			ctx.rt->DrawEllipse(el, brush, strokePhys, NULL);
-
-			// L2: 主体活动弧 (圆角端帽)
-			brush->SetColor(_XLoad_ToColorF(accent, 255));
 			ID2D1PathGeometry* path = NULL;
 			if (SUCCEEDED(fac->CreatePathGeometry(&path)) && path){
 				ID2D1GeometrySink* sink = NULL;
@@ -1731,27 +1727,17 @@ void _XLoad_PaintSpinner(const _XLoad_PaintCtx& ctx, float tNorm, COLORREF accen
 		return;
 	}
 
-	// ---------- GDI+ 兜底 ----------
-	// XDraw_DrawArcF 用宿主本地*逻辑*坐标 (XCGUI 内部 ×dpi); 但 stroke 宽必须物理化
-	// (XDraw_SetLineWidthF transform-invariant, 见 模块封装规范.md §3.5.5#3).
-	// cap 直径 = strokeLog (逻辑) → 渲染后 = strokePhys (物理), 与笔画完全等宽.
-	float rLog       = (float)ctx.sizeLog * 0.5f - strokeLog * 0.5f;
+	// GDI+ 兜底
+	float rLog    = (float)ctx.sizeLog * kLoad_Spinner_RadiusRat;
 	if (rLog < 1.0f) rLog = 1.0f;
-	float boxLog     = rLog * 2.0f;
-	float boxLLog    = ctx.cxLog - rLog;
-	float boxTLog    = ctx.cyLog - rLog;
+	float boxLog  = rLog * 2.0f;
+	float boxLLog = ctx.cxLog - rLog;
+	float boxTLog = ctx.cyLog - rLog;
 
 	XDraw_SetLineWidthF(ctx.hDraw, strokePhys);
-
-	// L1: track
-	XDraw_SetBrushColor(ctx.hDraw, _XLoad_FadeAccent(accent, 45));
-	XDraw_DrawArcF(ctx.hDraw, boxLLog, boxTLog, boxLog, boxLog, -90.0f, 360.0f);
-
-	// L2: 主弧
 	XDraw_SetBrushColor(ctx.hDraw, accent);
 	XDraw_DrawArcF(ctx.hDraw, boxLLog, boxTLog, boxLog, boxLog, startDeg, sweepDeg);
 
-	// L3: 圆角端帽 - 直径 = strokeLog (逻辑), 圆心在 (cx,cy) + rLog * (cos,sin)
 	float capR = strokeLog * 0.5f;
 	float sxL = ctx.cxLog + rLog * cosf(startRad);
 	float syL = ctx.cyLog + rLog * sinf(startRad);
@@ -1992,7 +1978,7 @@ void _XLoad_PaintBars(const _XLoad_PaintCtx& ctx, float tNorm, COLORREF accent)
 	}
 }
 
-// 派发到具体风格
+// 派发到具体风格 (统一 tNorm ∈ [0,1))
 void _XLoad_PaintAnim(const _XLoad_PaintCtx& ctx, xloading_style_ style,
 	float tNorm, COLORREF accent)
 {
@@ -2008,7 +1994,7 @@ void _XLoad_PaintAnim(const _XLoad_PaintCtx& ctx, xloading_style_ style,
 // 每种风格的"动画周期" (ms, speed=1.0 时)
 int _XLoad_PeriodMs(xloading_style_ s){
 	switch (s){
-	case xloading_style_spinner: return 1200;   // daisyUI / Material 平滑旋转
+	case xloading_style_spinner: return 1500;   // seamless snake 单周期
 	case xloading_style_dots:    return 1800;   // Win8/10 boot 节奏 (单 dot 完整 lifecycle)
 	case xloading_style_spokes:  return 1080;   // 12 spoke * 90ms
 	case xloading_style_pulse:   return 1400;
@@ -2076,16 +2062,16 @@ int CALLBACK _XLoad_OnPaint(HXCGUI hSelf, HDRAW hDraw, BOOL* pbHandled)
 	int cyAnim  = yTop + p->sizeCy / 2;
 
 	// 4) 动画相位
-	DWORD now = ::GetTickCount();
-	int   period = (int)(_XLoad_PeriodMs(p->style) / (p->speed > 0 ? p->speed : 1.0f));
-	if (period < 50) period = 50;
+	DWORD now     = ::GetTickCount();
 	DWORD elapsed = now - p->startTick;
-	float tNorm = (elapsed % period) / (float)period;
 
 	// 5) 动画 (取 min(cx, cy) 为有效边长 — cx != cy 时不变形)
 	int aSize = (p->sizeCx < p->sizeCy) ? p->sizeCx : p->sizeCy;
 	_XLoad_PaintCtx pctx;
 	_XLoad_BuildCtx(pctx, hDraw, hSelf, cx, cyAnim, aSize);
+	int period = (int)(_XLoad_PeriodMs(p->style) / (p->speed > 0 ? p->speed : 1.0f));
+	if (period < 50) period = 50;
+	float tNorm = (elapsed % period) / (float)period;
 	_XLoad_PaintAnim(pctx, p->style, tNorm, c.accent);
 
 	// 6) 文本 (动画下方居中)
