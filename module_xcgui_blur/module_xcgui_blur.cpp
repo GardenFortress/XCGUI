@@ -23,12 +23,10 @@
 //   4. Win10 1607~1709 (14393~16299)  : ACCENT_ENABLE_BLURBEHIND        (Win10 风 blur)
 //   5. Win7 / Win8 / 8.1 / 老 Win10   : 不启用 backdrop blur, CXBlur 退化为"仅装饰".
 //
-// dcomp 路径 (Win10 1803+, Compositor + DesktopWindowTarget):
-//   实验性. PoC 视觉对齐 Win11 Start Menu 但 *仅在 WS_EX_NOREDIRECTIONBITMAP 窗口*
-//   工作 (CreateBackdropBrush 在 PoC 那种无 redirection bitmap 窗口里取桌面像素;
-//   XCGUI 普通窗口有 redirection bitmap, backdrop brush 拿到的是窗内空合成,
-//   视觉是黑/白底). 完整集成需要 child HWND 方案或 XCGUI 渲染移植, TODO.
-//   当前用 env XBLUR_FORCE_DCOMP=1 启用 (回归测试).
+// dcomp 路径 (Win10 1803+, AttachToWndEx / XBLUR_FORCE_DCOMP):
+//   PoC 视觉对齐 Win11 Start Menu. 完整集成走 owner-owned acrylic 子窗
+//   (module_xcgui_blur_dcomp.cpp). 普通 AttachToWnd 仍走 ACCENT 路径;
+//   env XBLUR_FORCE_DCOMP=1 可在 host 窗上强制 dcomp 实验.
 //
 // Win10 1903 起 ACRYLIC 被微软阉割: SetWindowCompositionAttribute 仍返 TRUE 但
 // DWM 不再跑 blur kernel, 只剩透明+tint 且 resize 拉胯, Win10 22H2 仍未修.
@@ -54,16 +52,8 @@
 #pragma comment(lib, "dwmapi.lib")
 
 //============================================================================
-// 工具函数 / 颜色解码
+// 工具函数
 //============================================================================
-static inline BYTE GetRGBA_R(COLORREF c){ return (BYTE)((c) & 0xFF); }
-static inline BYTE GetRGBA_G(COLORREF c){ return (BYTE)(((c) >> 8) & 0xFF); }
-static inline BYTE GetRGBA_B(COLORREF c){ return (BYTE)(((c) >> 16) & 0xFF); }
-static inline BYTE GetRGBA_A(COLORREF c){ return (BYTE)(((c) >> 24) & 0xFF); }
-static inline COLORREF MakeRGBA(BYTE r, BYTE g, BYTE b, BYTE a){
-	return (COLORREF)((a << 24) | (b << 16) | (g << 8) | r);
-}
-
 static inline float Clampf(float v, float lo, float hi){
 	if (v < lo) return lo;
 	if (v > hi) return hi;
@@ -258,11 +248,8 @@ enum _XBlur_PathKind {
 	XBLUR_PATH_DCOMP_WINRT,
 };
 
-namespace {
-
-// 用 RtlGetVersion 拿真实 OS build (GetVersionEx 在没 manifest 的进程上会撒谎封顶在 6.2).
-// 缓存一次, 进程内不变.
-static DWORD XBlur_GetOsBuild(){
+// 用 RtlGetVersion 拿真实 OS build. 缓存一次, blur / dcomp 共用.
+DWORD XBlur_GetOsBuild(){
 	static DWORD s_build = 0;
 	if (s_build) return s_build;
 	HMODULE nt = ::GetModuleHandleW(L"ntdll.dll");
@@ -276,8 +263,55 @@ static DWORD XBlur_GetOsBuild(){
 	s_build = vi.dwBuildNumber ? vi.dwBuildNumber : 1;
 	return s_build;
 }
-	
-// 按 OS build 挑合适的渲染路径.
+
+static bool XBlur_QuerySystemDarkMode(){
+	HKEY hk = NULL;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER,
+	                  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+	                  0, KEY_READ, &hk) != ERROR_SUCCESS) return false;
+	DWORD val = 1, sz = sizeof(val);
+	bool dark = false;
+	if (RegQueryValueExW(hk, L"AppsUseLightTheme", NULL, NULL,
+	                     (LPBYTE)&val, &sz) == ERROR_SUCCESS){
+		dark = (val == 0);
+	}
+	RegCloseKey(hk);
+	return dark;
+}
+
+static void XBlur_ResolveDcompEffectArgs(int themeIn, COLORREF userTint, float userBlurOpacity,
+                                          int uniformBrightnessIn, float userNoise,
+                                          int& tintR, int& tintG, int& tintB, int& tintA,
+                                          float& blurOpacity, float& saturation,
+                                          BOOL& uniformBrightness, float& noiseAlphaPct){
+	bool dark;
+	if      (themeIn == xblur_theme_light) dark = false;
+	else if (themeIn == xblur_theme_dark)  dark = true;
+	else                                    dark = XBlur_QuerySystemDarkMode();
+
+	if (userTint != 0){
+		tintR = (int)GetRValue(userTint);
+		tintG = (int)GetGValue(userTint);
+		tintB = (int)GetBValue(userTint);
+		tintA = (int)GetAValue(userTint);
+	} else {
+		if (dark){ tintR = 32;  tintG = 32;  tintB = 32;  tintA = 255; }
+		else     { tintR = 243; tintG = 243; tintB = 243; tintA = 255; }
+	}
+
+	blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
+	                                        : (dark ? 0.22f : 0.35f);
+	saturation = dark ? 1.2f : 1.3f;
+
+	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
+		noiseAlphaPct = userNoise * 100.0f;
+	} else {
+		noiseAlphaPct = dark ? 2.1f : 1.0f;
+	}
+	uniformBrightness = uniformBrightnessIn ? TRUE : FALSE;
+}
+
+namespace {
 //
 // Win10 1903 (build 18362) 起微软 *阉割* 了 ACCENT_ENABLE_ACRYLICBLURBEHIND:
 // SetWindowCompositionAttribute 仍返 TRUE, 但 DWM 不再跑 blur kernel, 只剩
@@ -343,9 +377,6 @@ static std::mutex                                g_hostBlurMutex;
 static std::map<HWND, _XBlur_HostBlurState>      g_hostBlurMap;
 
 // 暴露给 paint 端: 查询某 HWND 当前生效路径 (paint 时可分支不同 alpha 写法).
-// 不持锁也安全: activePath 只在 g_hostBlurMutex 保护下写, 但读端走快路径 std::map
-// find, 偶发竞态最坏只是用了上一帧路径 (一帧后自动校正), 没有正确性问题.
-// 调用方在锁外, 用 find/end 防 stale iterator.
 static int XBlur_GetActivePath(HWND host){
 	if (!host) return XBLUR_PATH_DECORATIVE;
 	std::lock_guard<std::mutex> lk(g_hostBlurMutex);
@@ -518,6 +549,7 @@ static bool XBlur_ApplyDwmSystemBackdrop(HWND host, DWORD backdropType, bool dar
 	BOOL bDark = dark ? TRUE : FALSE;
 	HRESULT hrDark = ::DwmSetWindowAttribute(host, kXBlur_DWMWA_USE_IMMERSIVE_DARK_MODE,
 	                                          &bDark, sizeof(bDark));
+	(void)hrDark;
 
 	// *不要* 手动 DwmExtendFrameIntoClientArea({-1,-1,-1,-1}):
 	// sheet-of-glass 是 Aero glass (Win7 时代) frame 通道, 与 Win11 DWMSBT
@@ -526,12 +558,13 @@ static bool XBlur_ApplyDwmSystemBackdrop(HWND host, DWORD backdropType, bool dar
 	// 配方 (实测: 4 个 API 全 S_OK, 视觉死灰; 见 dbgview 诊断).
 	// DWMSBT 会自动处理 frame extension, 我们什么都不调.
 	HRESULT hrFrame = S_OK;
+	(void)hrFrame;
 
-	// 把 caption 也设为透明色, 让 DWM 在 caption 区也跑 acrylic 而不是默认色填充.
-	// 这是 Tringi 推荐配方的关键一步, 没它的话 caption 色会盖在 acrylic 上.
+	// caption 透明色: 让 DWM 在 caption 区也跑 acrylic 而不是默认色填充.
 	COLORREF capColor = kXBlur_DWMWA_COLOR_NONE;
 	HRESULT hrCap = ::DwmSetWindowAttribute(host, kXBlur_DWMWA_CAPTION_COLOR,
 	                                         &capColor, sizeof(capColor));
+	(void)hrCap;
 
 	HRESULT hr = ::DwmSetWindowAttribute(host, kXBlur_DWMWA_SYSTEMBACKDROP_TYPE,
 	                                     &backdropType, sizeof(backdropType));
@@ -551,21 +584,8 @@ static void XBlur_DisableDwmSystemBackdrop(HWND host){
 }
 
 // === Light/Dark 探测 ===
-// 用 HKCU\...\Personalize\AppsUseLightTheme. 1 = 浅色, 0 = 深色.
-// 只用一次/attach, 系统主题切换由 WM_SETTINGCHANGE 触发重设 (见 OnWndSettingChangeImpl).
 static bool XBlur_IsSystemDarkMode_Helper(){
-	HKEY hk = NULL;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER,
-	                  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-	                  0, KEY_READ, &hk) != ERROR_SUCCESS) return false;
-	DWORD val = 1, sz = sizeof(val);
-	bool dark = false;
-	if (RegQueryValueExW(hk, L"AppsUseLightTheme", NULL, NULL,
-	                     (LPBYTE)&val, &sz) == ERROR_SUCCESS){
-		dark = (val == 0);
-	}
-	RegCloseKey(hk);
-	return dark;
+	return XBlur_QuerySystemDarkMode();
 }
 
 // 计算路径需要的 effective tint (从首个订阅元素读 m_tintColor).
@@ -701,6 +721,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		COLORREF userTint        = 0;
 		BOOL     uniformBright   = TRUE;
 		float    userBlurOpacity = -1.0f;  // -1 = 未设
+		float    userNoise       = 0.06f;
 		int      userTheme       = xblur_theme_custom;
 		if (!s.subs.empty()){
 			HELE hFirst = *s.subs.begin();
@@ -710,56 +731,36 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 					userTint        = p->GetTintColor();
 					uniformBright   = p->GetUniformBrightness();
 					userBlurOpacity = p->GetBlurOpacity();
+					userNoise       = p->GetNoise();
 					userTheme       = p->GetTheme();
 				}
 			}
 		}
 
 		// 用户显式 SetTheme(light/dark) → 强制对应 PoC 默认 (无视系统主题);
-		// 否则 (auto/custom) 跟随系统 AppsUseLightTheme. 这跟 ApplyThemePreset
-		// 的解读一致, 让用户 SetTheme(dark) 在 light 系统下也能拿到 PoC dark 视觉.
+		// 否则 (auto/custom) 跟随系统 AppsUseLightTheme.
 		bool dark;
 		if (userTheme == xblur_theme_light)      dark = false;
 		else if (userTheme == xblur_theme_dark)  dark = true;
 		else                                     dark = XBlur_IsSystemDarkMode_Helper();
 		s.darkMode = dark;
 
-		// === tint: 仅用 RGB, alpha 部分忽略 (见下面 blurOpacity 注释) ===
-		// 用户 SetTintColor(0) → 走主题 PoC RGB; 非 0 → 用用户 RGB.
-		// ApplyThemePreset 会把 m_tintColor 改成 ACCENT 校准值 (alpha=100/64,
-		// RGB=(40, 41, 42)/(247, 248, 249)) — RGB 接近 PoC, 直接用即可.
-		COLORREF tint = userTint;
-		if (tint == 0){
-			tint = dark ? MakeRGBA(40, 41, 42, 255)
-			            : MakeRGBA(247, 248, 249, 255);
-		}
-		s.activeTint = tint;
+		int tintR, tintG, tintB, tintA;
+		float blurOpacity, saturation, noiseAlphaPct;
+		BOOL uniformBrightOut;
+		XBlur_ResolveDcompEffectArgs(
+			userTheme, userTint, userBlurOpacity,
+			uniformBright ? 1 : 0, userNoise,
+			tintR, tintG, tintB, tintA,
+			blurOpacity, saturation, uniformBrightOut, noiseAlphaPct);
+		uniformBright = uniformBrightOut;
+		s.activeTint = RGBA(tintR, tintG, tintB, tintA);
 
-		// === blurOpacity ("通透感") 跟 m_tintColor.alpha 解耦 ===
-		// 历史包袱: m_tintColor.alpha 在 ACCENT_ACRYLIC 路径下是 GradientColor.A,
-		// ApplyThemePreset 按那条路径校准. dcomp 路径用 OpacityEffect, 数值范围
-		// 完全不同 (PoC: light=0.35/dark=0.22 vs ACCENT: light=64/dark=100), 直接
-		// 反算会让 dcomp 看起来像 light 路径 (这就是图 2 症状).
-		//
-		// 故 dcomp 路径不再从 tintA 反算. 优先级 (高→低):
-		//   1. 用户 SetBlurOpacity 显式设 (userBlurOpacity >= 0)
-		//   2. 主题 PoC 默认 (light=0.35, dark=0.22)
-		// 用户想跟 ACCENT 路径 GradientColor 等价控制 → 用 SetBlurOpacity API.
-		float blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
-		                                              : (dark ? 0.22f : 0.35f);
-
-		// saturation / noiseAlphaPct 永远走主题默认 (PoC 校准值).
-		// TODO: 暴露 SetSaturation / SetNoiseAlphaPercent setter 后改成读用户值,
-		//       0 / 负数 表示"用主题默认".
-		float saturation    = dark ? 1.2f : 1.3f;
-		float noiseAlphaPct = dark ? 2.1f : 1.0f;
-		// TODO: EnableNativeShadow 激活时切到 8 (留阴影绘制空间).
-		int   inset         = 0;
+		int inset = 0;
 
 		s.enabled = XBlurDComp::Apply(
 			host,
-			(int)GetRGBA_R(tint), (int)GetRGBA_G(tint),
-			(int)GetRGBA_B(tint), (int)GetRGBA_A(tint),
+			tintR, tintG, tintB, tintA,
 			blurOpacity,
 			saturation, uniformBright, noiseAlphaPct, inset);
 		break;
@@ -856,14 +857,6 @@ static void XBlur_ReleaseHostBlur(HWND host, HELE hEle){
 	}
 }
 
-// 通知 host: 某个 sub 的 element 位置/大小变化. ACCENT 路径由 DWM 自己跟,
-// 不需重算; 保留函数仅为 OnSizeImpl 预留 hook 点.
-static void XBlur_UpdateHostBlur(HWND host){
-	if (!host || !::IsWindow(host)) return;
-	std::lock_guard<std::mutex> lk(g_hostBlurMutex);
-	XBlur_ApplyHostBlur_Locked(host);
-}
-
 }  // anonymous namespace
 
 //============================================================================
@@ -893,12 +886,12 @@ static std::atomic<int>      g_globalTheme{xblur_theme_custom};
 //     正合适. 同上凑合.
 static std::mutex            g_themeDefaultsMutex;
 static CXBlurThemeDefaults   g_lightDefaults = {
-	/*tintColor */ 0x40FCFCFC,   // 0xAABBGGRR: A=64 (~25%), B=G=R=252 (Win11 light Start Menu 同款)
-	/*noise     */ 0.06f
+	RGBA(243, 243, 243, 64),   // Win11 light Start Menu 同款 (~25% alpha)
+	0.06f
 };
 static CXBlurThemeDefaults   g_darkDefaults = {
-	/*tintColor */ 0x64161414,   // 0xAABBGGRR: A=100 (~39%), B=22, G=20, R=20 (dark 需要更高 alpha)
-	/*noise     */ 0.06f
+	RGBA(32, 32, 32, 100),     // dark 需要更高 alpha (~39%)
+	0.06f
 };
 
 }  // anonymous namespace
@@ -911,7 +904,7 @@ CXBlur::CXBlur(){
 	// 默认 alpha=64 (~25%) 与 Win11 Start Menu light 主题同款 — 走 ACCENT_ACRYLIC
 	// 路径时该值是传给 DWM GradientColor 的 tint 强度. SetTheme(light/dark) 之后
 	// 改用主题 defaults.
-	m_tintColor.store(MakeRGBA(252, 253, 254, 64));    // Win11 light acrylic
+	m_tintColor.store(RGBA(252, 253, 254, 64));    // Win11 light acrylic
 	m_theme.store(xblur_theme_custom);
 	m_noise.store(0.06f);                              // 6% 灰度噪点纹理
 	m_cornerTL.store(0);
@@ -920,10 +913,13 @@ CXBlur::CXBlur(){
 	m_cornerBL.store(0);
 	m_borderColor.store(0);
 	m_borderWidth.store(0.0f);
+	XC_SetD2dTextAntialiasMode(2);
 }
 
 CXBlur::~CXBlur(){
-	if (XC_IsHELE((HXCGUI)m_hEle)){
+	if (m_attachedExDcomp){
+		DetachExInternal();
+	} else if (XC_IsHELE((HXCGUI)m_hEle)){
 		DetachInternal();
 	}
 }
@@ -1037,47 +1033,7 @@ BOOL CXBlur::AttachToWnd(HWINDOW hWnd){
 // 必须从本 TU (module_xcgui_blur.cpp) 调那 5 个 XCGUI API — dcomp.cpp TU 调它们高 DPI 下
 // XCGUI 内部行为微妙不同, 视觉错位.
 
-// 把当前 m_theme/m_tintColor/m_blurOpacity/m_uniformBrightness/m_noise 读出, 折算成
-// XBlurDComp::Apply 所需的 8 个参数. 用户 set 过的优先, 没设走主题默认 (PoC 校准).
-static void XBlur_ResolveExEffectArgs(int themeIn, COLORREF userTint, float userBlurOpacity,
-                                       int uniformBrightnessIn, float userNoise,
-                                       /*out*/ int& tintR, int& tintG, int& tintB, int& tintA,
-                                       /*out*/ float& blurOpacity, float& saturation,
-                                       /*out*/ BOOL& uniformBrightness, float& noiseAlphaPct){
-	bool dark;
-	if      (themeIn == xblur_theme_light) dark = false;
-	else if (themeIn == xblur_theme_dark)  dark = true;
-	else                                    dark = XBlur_IsSystemDarkMode_Helper();
-
-	if (userTint != 0){
-		tintR = (int)GetRGBA_R(userTint);
-		tintG = (int)GetRGBA_G(userTint);
-		tintB = (int)GetRGBA_B(userTint);
-		tintA = (int)GetRGBA_A(userTint);
-	} else {
-		// PoC 校准: light=(247,248,249,255) dark=(40,41,42,255)
-		if (dark){ tintR = 40;  tintG = 41;  tintB = 42;  tintA = 255; }
-		else     { tintR = 247; tintG = 248; tintB = 249; tintA = 255; }
-	}
-
-	blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
-	                                        : (dark ? 0.22f : 0.35f);
-
-	saturation = dark ? 1.2f : 1.3f;
-
-	// m_noise 默认 0.06f. 用户没改 → 走主题预设 (light 1% / dark 2.1%); 改了 → 用户值.
-	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
-		noiseAlphaPct = userNoise * 100.0f;
-	} else {
-		noiseAlphaPct = dark ? 1.5f : 1.0f;
-	}
-
-	uniformBrightness = uniformBrightnessIn ? TRUE : FALSE;
-}
-
-// 重新算 Ex 路径下的 effect args + 调 XBlurDComp::Apply 刷新 acrylic visual.
-// 用户 set 过 tint/theme/opacity/etc. 后, dcomp visual tree 不重建, 仅 effect brush 换,
-// 视觉不闪. 调用方应在持有锁外调.
+// 把当前实例参数折算成 XBlurDComp::Apply 所需的 8 个参数 (见 XBlur_ResolveDcompEffectArgs).
 void CXBlur::ReapplyExEffects(){
 	if (!m_attachedExDcomp) return;
 	HWND acrylic = XBlurDComp::GetAcrylicHwnd();
@@ -1086,12 +1042,11 @@ void CXBlur::ReapplyExEffects(){
 	int tintR, tintG, tintB, tintA;
 	float blurOpacity, saturation, noiseAlphaPct;
 	BOOL uniformBrightness;
-	XBlur_ResolveExEffectArgs(
+	XBlur_ResolveDcompEffectArgs(
 		m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
 		m_uniformBrightness.load(), m_noise.load(),
 		tintR, tintG, tintB, tintA,
 		blurOpacity, saturation, uniformBrightness, noiseAlphaPct);
-
 	XBlurDComp::Apply(acrylic, tintR, tintG, tintB, tintA,
 	                  blurOpacity, saturation, uniformBrightness, noiseAlphaPct, 0);
 }
@@ -1102,10 +1057,14 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 	// 路径选择: auto = dcomp > dwm. 当前仅实现 dcomp 分支 (Win10 1803+ + dcomp 可用).
 	// xblur_path_dwm 后续可走老 AttachToWnd ACCENT 路径 (TODO).
 	bool wantDcomp = (path == xblur_path_auto || path == xblur_path_dcomp);
-	bool dcompOk = (XBlur_GetOsBuild() >= 17134) && XBlurDComp::IsSupported();
-	if (!wantDcomp || !dcompOk){
-		// 不支持或显式选 dwm — 退回老 AttachToWnd 路径.
+	if (!wantDcomp || !XBlurDComp::IsSupported()){
 		return AttachToWnd(hWnd);
+	}
+
+	if (m_attachedExDcomp){
+		DetachExInternal();
+	} else if (XC_IsHELE((HXCGUI)m_hEle)){
+		DetachInternal();
 	}
 
 	// === dcomp acrylic owner 路径 ===
@@ -1119,7 +1078,7 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 	int tintR, tintG, tintB, tintA;
 	float blurOpacity, saturation, noiseAlphaPct;
 	BOOL uniformBright;
-	XBlur_ResolveExEffectArgs(
+	XBlur_ResolveDcompEffectArgs(
 		m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
 		m_uniformBrightness.load(), m_noise.load(),
 		tintR, tintG, tintB, tintA,
@@ -1140,21 +1099,58 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 
 	// 5. 给 acrylic 加系统圆角 (Win11 自动加 BORDER + frame shadow).
 	{
-		DWORD pref = 2; // DWMWCP_ROUND
+		DWORD pref = (DWORD)xblur_corner_round;
 		::DwmSetWindowAttribute(acrylic, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */,
 			&pref, sizeof(pref));
 	}
 
-	m_attachToWindow = true;
-	m_attachedWnd    = hWnd;
+	m_attachToWindow  = true;
+	m_attachedWnd     = hWnd;
 	m_attachedExDcomp = true;
+	m_acrylicApplied  = true;
+
+	{
+		std::lock_guard<std::mutex> lk(g_blurInstancesMutex);
+		g_blurInstances.insert(this);
+	}
+	int gt = g_globalTheme.load();
+	if (gt != xblur_theme_custom){
+		m_theme.store(gt);
+		ReapplyExEffects();
+	}
 	return TRUE;
 }
 
 //============================================================================
 // Detach
 //============================================================================
+void CXBlur::DetachExInternal(){
+	if (!m_attachedExDcomp) return;
+
+	{
+		std::lock_guard<std::mutex> lk(g_blurInstancesMutex);
+		g_blurInstances.erase(this);
+	}
+
+	if (m_attachedWnd && XC_IsHWINDOW((HXCGUI)m_attachedWnd)){
+		XBlurDComp::DetachAcrylicHost((void*)m_attachedWnd);
+	} else {
+		// 主窗句柄已失效: 只清 acrylic 子窗, 不调 XWnd_GetHWND.
+		XBlurDComp::DetachAcrylicHost(NULL);
+	}
+
+	m_attachedExDcomp  = false;
+	m_attachToWindow   = false;
+	m_attachedWnd      = NULL;
+	m_acrylicApplied   = false;
+	m_hostHwnd         = NULL;
+}
+
 void CXBlur::Detach(){
+	if (m_attachedExDcomp){
+		DetachExInternal();
+		return;
+	}
 	if (XC_IsHELE((HXCGUI)m_hEle)){
 		DetachInternal();
 	}
@@ -1232,7 +1228,7 @@ void CXBlur::DetachInternal(){
 
 	UnhookEvents(m_hEle);
 
-	if (m_attachToWindow && m_attachedWnd){
+	if (m_attachToWindow && m_attachedWnd && XC_IsHWINDOW((HXCGUI)m_attachedWnd)){
 		// 还原 AttachToWnd 时改的窗体属性 (在 UnregisterWindowSizeHook 把
 		// m_attachedWnd 置 NULL 之前做).
 		if (m_hasSavedWndLayout){
@@ -1266,6 +1262,7 @@ void CXBlur::DetachInternal(){
 	m_owned          = false;
 	m_attachToWindow = false;
 	m_attachedWnd    = NULL;
+	m_attachedExDcomp = false;
 }
 
 //============================================================================
@@ -1314,6 +1311,7 @@ static int CALLBACK _XBlur_DestroyCB(HELE hEle, BOOL* pbHandled){
 }
 // 全局窗口级回调 (只会被注册一次/一个 HWND)
 static int CALLBACK _CXBlur_GlobalSettingCB(HWINDOW hWnd, UINT uFlags, void* pStr, BOOL* pbHandled){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return 0;
 	HWND raw = XWnd_GetHWND(hWnd);
 	if (!raw) return 0;
 	auto subs = SnapshotSubs(raw);
@@ -1323,6 +1321,7 @@ static int CALLBACK _CXBlur_GlobalSettingCB(HWINDOW hWnd, UINT uFlags, void* pSt
 	return 0;
 }
 static int CALLBACK _CXBlur_GlobalWndSizeCB(HWINDOW hWnd, UINT nFlags, SIZE* pSize, BOOL* pbHandled){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return 0;
 	HWND raw = XWnd_GetHWND(hWnd);
 	if (!raw) return 0;
 	auto subs = SnapshotSubs(raw);
@@ -1340,7 +1339,7 @@ void CXBlur::HookEvents(HELE hEle){
 
 	// 让本实例加入 host 全局订阅表. WM_SETTINGCHANGE 只被首个订阅者注册一次.
 	HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)hEle);
-	if (!hxw) return;
+	if (!hxw || !XC_IsHWINDOW((HXCGUI)hxw)) return;
 	HWND raw = XWnd_GetHWND(hxw);
 	if (!raw) return;
 
@@ -1366,7 +1365,7 @@ void CXBlur::UnhookEvents(HELE hEle){
 	XEle_SetUserData(hEle, 0);
 
 	HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)hEle);
-	if (!hxw) return;
+	if (!hxw || !XC_IsHWINDOW((HXCGUI)hxw)) return;
 	HWND raw = XWnd_GetHWND(hxw);
 	if (!raw) return;
 
@@ -1393,6 +1392,7 @@ void CXBlur::UnhookEvents(HELE hEle){
 }
 
 void CXBlur::RegisterWindowSizeHook(HWINDOW hWnd){
+	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return;
 	HWND raw = XWnd_GetHWND(hWnd);
 	if (!raw) return;
 
@@ -1422,7 +1422,7 @@ void CXBlur::UnregisterWindowSizeHook(){
 HWND CXBlur::FindHostHwnd() const {
 	if (!XC_IsHELE((HXCGUI)m_hEle)) return NULL;
 	HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)m_hEle);
-	if (!hxw) return NULL;
+	if (!hxw || !XC_IsHWINDOW((HXCGUI)hxw)) return NULL;
 	HWND raw = XWnd_GetHWND(hxw);
 	if (!raw) return NULL;
 	return raw;
@@ -1452,7 +1452,7 @@ int CXBlur::OnPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled){
 	// CXShadow" 也能正确触发释放. 检查极轻量 (一次原子读 + 一次 mutex map 查询).
 	if (m_acrylicApplied && m_hostHwnd){
 		HWINDOW hxw = XWidget_GetHWINDOW((HXCGUI)hEle);
-		if (hxw){
+		if (hxw && XC_IsHWINDOW((HXCGUI)hxw)){
 			window_transparent_ wt = XWnd_GetTransparentType(hxw);
 			if (wt != window_transparent_false){
 				XBlur_ReleaseHostBlur(m_hostHwnd, hEle);
@@ -1484,7 +1484,8 @@ int CXBlur::OnSizeImpl(HELE /*hEle*/, int /*nFlags*/, UINT /*nAdjustNo*/, BOOL* 
 
 int CXBlur::OnDestroyImpl(HELE hEle, BOOL* /*pbHandled*/){
 	// 还原 AttachToWnd 时改的窗体属性 (元素被 XCGUI 自动销毁路径).
-	if (m_attachToWindow && m_attachedWnd && m_hasSavedWndLayout){
+	if (m_attachToWindow && m_attachedWnd && m_hasSavedWndLayout
+	    && XC_IsHWINDOW((HXCGUI)m_attachedWnd)){
 		XWnd_EnableLayout(m_attachedWnd, m_savedWndLayout ? TRUE : FALSE);
 		XWnd_EnableLayoutOverlayBorder(m_attachedWnd, m_savedWndOverlayBorder ? TRUE : FALSE);
 		m_hasSavedWndLayout = false;
@@ -1572,19 +1573,15 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 	int bl = m_cornerBL.load();
 	bool hasCorner = (tl | tr | br | bl) > 0;
 
-	// QI ID2D1DeviceContext: 比 base RT 多 effect graph + COPY blend, 是让
-	// ACCENT_ACRYLIC 实际透出 backdrop 的前提 (base RT 默认 SOURCE_OVER 写
-	// alpha=255 会把 backdrop 整个盖掉).
-	static const GUID IID_ID2D1DeviceContext_local =
-		{ 0xe8f7fe7a, 0x191c, 0x466d, { 0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98 } };
+	// QI ID2D1DeviceContext: base RT 无 COPY blend / effect graph.
 	ID2D1DeviceContext* dc = NULL;
-	bool haveDc = SUCCEEDED(rt->QueryInterface(IID_ID2D1DeviceContext_local, (void**)&dc)) && dc;
+	bool haveDc = SUCCEEDED(rt->QueryInterface(IID_ID2D1DeviceContext, (void**)&dc)) && dc;
 
 	ID2D1Factory* pFac = NULL;
 	rt->GetFactory(&pFac);
 
 	COLORREF tc = m_tintColor.load();
-	BYTE ta = GetRGBA_A(tc);
+	BYTE ta = GetAValue(tc);
 
 	// === 取当前激活的 backdrop 路径 (DWM_TRANSIENT / ACCENT_ACRYLIC / ACCENT_BLURBEHIND
 	// / DECORATIVE), 决定 element 端 paint 怎么 blend.
@@ -1644,8 +1641,8 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 				if (ta != 0){
 					ID2D1SolidColorBrush* pTint = NULL;
 					dc->CreateSolidColorBrush(
-						D2D1::ColorF(GetRGBA_R(tc) / 255.0f, GetRGBA_G(tc) / 255.0f,
-						             GetRGBA_B(tc) / 255.0f, ta / 255.0f),
+						D2D1::ColorF(GetRValue(tc) / 255.0f, GetGValue(tc) / 255.0f,
+						             GetBValue(tc) / 255.0f, ta / 255.0f),
 						&pTint);
 					if (pTint){
 						D2D1_PRIMITIVE_BLEND oldBlend = dc->GetPrimitiveBlend();
@@ -1660,8 +1657,8 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 				if (ta != 0){
 					ID2D1SolidColorBrush* pTint = NULL;
 					dc->CreateSolidColorBrush(
-						D2D1::ColorF(GetRGBA_R(tc) / 255.0f, GetRGBA_G(tc) / 255.0f,
-						             GetRGBA_B(tc) / 255.0f, ta / 255.0f),
+						D2D1::ColorF(GetRValue(tc) / 255.0f, GetGValue(tc) / 255.0f,
+						             GetBValue(tc) / 255.0f, ta / 255.0f),
 						&pTint);
 					if (pTint) dc->FillGeometry(pGeom, pTint);
 					SafeRelease(pTint);
@@ -1734,8 +1731,8 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 		if (ta != 0){
 			ID2D1SolidColorBrush* pTint = NULL;
 			HRESULT hr = rt->CreateSolidColorBrush(
-				D2D1::ColorF(GetRGBA_R(tc) / 255.0f, GetRGBA_G(tc) / 255.0f,
-				             GetRGBA_B(tc) / 255.0f, ta / 255.0f),
+				D2D1::ColorF(GetRValue(tc) / 255.0f, GetGValue(tc) / 255.0f,
+				             GetBValue(tc) / 255.0f, ta / 255.0f),
 				&pTint);
 			if (SUCCEEDED(hr) && pTint){
 				rt->FillRectangle(rfEle, pTint);
@@ -1746,7 +1743,7 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 
 	// 边框: 路径中线沿 element 内侧 inset = bw/2, 圆角半径同步缩 bw/2 防角度偏移.
 	COLORREF bc = m_borderColor.load();
-	BYTE ba = GetRGBA_A(bc);
+	BYTE ba = GetAValue(bc);
 	float bw = m_borderWidth.load();
 	if (ba != 0 && bw > 0.0f && pFac){
 		D2D1_RECT_F rfBd = D2D1::RectF(
@@ -1758,8 +1755,8 @@ void CXBlur::OnPaintD2D(ID2D1RenderTarget* rt, HDRAW /*hDraw*/){
 			(std::max)(0, br - half), (std::max)(0, bl - half));
 		ID2D1SolidColorBrush* pBd = NULL;
 		rt->CreateSolidColorBrush(
-			D2D1::ColorF(GetRGBA_R(bc) / 255.0f, GetRGBA_G(bc) / 255.0f,
-			             GetRGBA_B(bc) / 255.0f, ba / 255.0f),
+			D2D1::ColorF(GetRValue(bc) / 255.0f, GetGValue(bc) / 255.0f,
+			             GetBValue(bc) / 255.0f, ba / 255.0f),
 			&pBd);
 		if (pBd && pBdGeom){
 			rt->DrawGeometry(pBdGeom, pBd, bw);
@@ -1790,12 +1787,12 @@ void CXBlur::OnPaintGdi(HDC hdc, HDRAW /*hDraw*/){
 	// GDI 模式 = 没挂 ACCENT_ACRYLIC (见 AttachInternal), 这里只画半透 tint
 	// 装饰层 + 边框, 跟"支持但用户关了透明效果"的视觉一致.
 	COLORREF tc = m_tintColor.load();
-	BYTE ta = GetRGBA_A(tc);
+	BYTE ta = GetAValue(tc);
 	if (ta != 0){
 		Gdiplus::Graphics g(hdc);
 		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 		Gdiplus::SolidBrush br_(
-			Gdiplus::Color(ta, GetRGBA_R(tc), GetRGBA_G(tc), GetRGBA_B(tc)));
+			Gdiplus::Color(ta, GetRValue(tc), GetGValue(tc), GetBValue(tc)));
 		if (hasCorner){
 			Gdiplus::GraphicsPath path;
 			XBlur_BuildGdiCornerPath(path,
@@ -1809,14 +1806,14 @@ void CXBlur::OnPaintGdi(HDC hdc, HDRAW /*hDraw*/){
 
 	// 边框: inset = bw/2 同步缩, 圆角半径同步缩 bw/2 防角度偏移.
 	COLORREF bc = m_borderColor.load();
-	BYTE ba = GetRGBA_A(bc);
+	BYTE ba = GetAValue(bc);
 	float bw = m_borderWidth.load();
 	if (ba != 0 && bw > 0.0f){
 		Gdiplus::Graphics g(hdc);
 		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 
 		Gdiplus::Pen pen(
-			Gdiplus::Color(ba, GetRGBA_R(bc), GetRGBA_G(bc), GetRGBA_B(bc)),
+			Gdiplus::Color(ba, GetRValue(bc), GetGValue(bc), GetBValue(bc)),
 			(Gdiplus::REAL)bw);
 
 		float inset = bw * 0.5f;
@@ -1865,18 +1862,7 @@ void CXBlur::RedrawSelf(){
 // 主题预设
 //============================================================================
 BOOL CXBlur::IsSystemDarkMode(){
-	HKEY hk = NULL;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER,
-	                  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-	                  0, KEY_READ, &hk) != ERROR_SUCCESS) return FALSE;
-	DWORD val = 1, sz = sizeof(val);
-	BOOL dark = FALSE;
-	if (RegQueryValueExW(hk, L"AppsUseLightTheme", NULL, NULL,
-	                     (LPBYTE)&val, &sz) == ERROR_SUCCESS){
-		dark = (val == 0);
-	}
-	RegCloseKey(hk);
-	return dark;
+	return XBlur_QuerySystemDarkMode() ? TRUE : FALSE;
 }
 
 void CXBlur::ApplyThemePreset(int theme){
@@ -1957,6 +1943,7 @@ CXBlurThemeDefaults CXBlur::GetThemeDefault(int theme){
 // 公开 setter / getter
 //============================================================================
 int CXBlur::GetBindMode() const {
+	if (m_attachedExDcomp && m_attachToWindow) return xblur_bind_window;
 	if (!XC_IsHELE((HXCGUI)m_hEle)) return xblur_bind_none;
 	if (m_attachToWindow) return xblur_bind_window;
 	return m_owned ? xblur_bind_owned : xblur_bind_attach;
@@ -2098,7 +2085,9 @@ BOOL CXBlur::IsSystemAcrylicSupported(){
 	BOOL enabled = FALSE;
 	return (SUCCEEDED(DwmIsCompositionEnabled(&enabled)) && enabled) ? TRUE : FALSE;
 }
-BOOL CXBlur::IsSystemAcrylicEnabled() const { return m_acrylicApplied ? TRUE : FALSE; }
+BOOL CXBlur::IsSystemAcrylicEnabled() const {
+	return (m_acrylicApplied || m_attachedExDcomp) ? TRUE : FALSE;
+}
 
 //============================================================================
 // EnableNativeShadow / EnableNativeRoundedCorner — host 状态机.
