@@ -1,0 +1,2 @@
+# FFmpeg 运行时 DLL / 可执行文件不纳入版本库，请自行下载放到 module_xcgui_media/ffmpeg/bin/
+module_xcgui_media/ffmpeg/bin/

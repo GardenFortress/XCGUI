@@ -1,72 +1,63 @@
-# XCGUI 模块扩展库
+# XCGUI 扩展模块
 
-[炫彩界面库 (XCGUI)](https://www.xcgui.com) 的扩展模块集合. D2D 主路径 + GDI/GDI+ 兜底, 兼容 Windows 7 SP1+.
+[炫彩界面库 (XCGUI)](https://www.xcgui.com) 的扩展模块集合。D2D 主路径 + GDI/GDI+ 兜底，兼容 Windows 7 SP1+。
 
 ## 模块
 
 | 模块 | 类 | 用途 |
 |---|---|---|
-| [`module_xcgui_editdw`](./module_xcgui_editdw/) | `CXEditDW : CXScrollView` | DirectWrite 富文本编辑框, 彩色 Emoji, 分段 layout 支持 200K+ 字符 |
-| [`module_xcgui_video`](./module_xcgui_video/) | `CXVideo : CXEle` | FFmpeg 视频播放器, D3D11VA/DXVA2 硬解, WASAPI 音频 |
-| [`module_xcgui_image`](./module_xcgui_image/) | `CXImageEx : CXEle` | FFmpeg 图片元素, 静/动态 jpg/png/webp/heic/avif/gif/apng 等 |
-| [`module_xcgui_blur`](./module_xcgui_blur/) | `CXBlur : CXEle` | DWM 亚克力 (`ACCENT_ACRYLIC`), 元素级 alpha 控制, per-corner 圆角 |
-| [`module_xcgui_shadow`](./module_xcgui_shadow/) | `CXShadow` | Win11 风格窗口外阴影 + AA 圆角描边 + 圆角内圈背景, DPI 自适应, 不占客户区 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` | UI 工具集: 悬停气泡提示, 加载动画, 单月历日期选择与双月历范围选择 |
-| [`module_xcgui_chat`](./module_xcgui_chat/) | `CXChatBubbleBox : CXLayoutFrame` | 聊天气泡富文本对话框, 发送/接收消息, 头像/名称/标签, 系统/可点击消息, 数据保存恢复 |
+| [`module_xcgui_media`](./module_xcgui_media/) | `CXImageEx` / `CXVideo` | 图片 + 视频播放，共享 FFmpeg / 渲染内核 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡 |
 
-详细 API 见各 `.h` 文件中的 `//@别名` 注释.
+旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
-## 兼容性
+详细 API 见各 `.h` 文件中的 `//@别名` 注释；`module_xcgui_uitool/示例/` 提供完整 demo。
 
-| 系统 | editdw / image | video | blur | shadow | uitool | chat |
-|---|---|---|---|---|---|---|
-| Win11 / Win10 1803+ | D2D | D2D + 硬解 | **DComp+WUC** (`AttachToWndEx`) / `ACCENT_ACRYLIC` | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
-| Win10 1607~1709 | D2D | D2D + 硬解 | ACCENT_BLURBEHIND | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
-| Win8 / 8.1 | D2D | D2D + 硬解 | 装饰层 | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
-| Win7 SP1 (有 GPU) | D2D | D2D + 软解 | 装饰层 | D2D + GDI+ DIB | D2D | D2D / DirectWrite |
-| Win7 SP1 (VMware 默认) | GDI 降级 | GDI+ 降级 + 软解 | 装饰层 | GDI+ DIB | GDI+ 兜底 | 依赖 `module_xcgui_editdw` 兜底能力 |
+## 环境要求
 
-> Win7 必须用 **FFmpeg 4.4.x**. 5.x+ 引入 Win8 API `WaitOnAddress`, 在 Win7 上加载即崩.
-
-## 运行时 DLL
-
-仅 `module_xcgui_video` / `module_xcgui_image` 依赖 FFmpeg, 其余模块均走 Windows SDK 自带 DLL.
-
-```
-avcodec-58.dll  avformat-58.dll  avutil-56.dll
-swresample-3.dll  swscale-5.dll  avdevice-58.dll
-```
-
-Win7 兼容包: <https://github.com/GyanD/codexffmpeg/releases/tag/4.4.3>
+- **C++ 标准：C++17**（`/std:c++17`）
+- MSVC 2017+（推荐 VS 2022）
+- Windows SDK ≥ 10.0.17763
+- XCGUI ≥ 2025-12
+- FFmpeg dev 包（仅 `module_xcgui_media` 需要；头文件见 `module_xcgui_media/ffmpeg/include`）
 
 ## 集成
 
-D2D 的 `POINTF` 与 XCGUI 内部 `POINTF` 同名, **`d2d1.h` 必须先 include**:
+`d2d1.h` 的 `POINTF` 与 XCGUI 内部同名，**必须先 include**：
 
 ```cpp
 #include <d2d1.h>
-#include <dwrite.h>                       // editdw 需要
+#include <dwrite.h>                       // uitool 需要
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_editdw.h"          // chat 依赖 editdw
-#include "module_xcgui_uitool.h"          // tooltip / loading / calendar UI 工具
-#include "module_xcgui_chat.h"            // 按需 include: editdw / video / image / blur / shadow / uitool / chat
+#include "module_xcgui_uitool.h"          // 或 module_xcgui_media.h
 
-XInitXCGUI(TRUE);                         // D2D 主渲染; FALSE = GDI+ 兜底
+XInitXCGUI(TRUE);                         // TRUE = D2D; FALSE = GDI+ 兜底
 ```
 
-`module_xcgui_uitool` 由 `module_xcgui_uitool.h` / `module_xcgui_uitool.cpp` / `module_xcgui_uitool_svgs.inc` 三个文件组成; `.cpp` 会包含 `.inc` 中的内置 SVG 图标资源, 工程中加入 `.h/.cpp` 并保持 `.inc` 同目录即可.
+### 半透明背景文本抗锯齿
 
-### `CXEditDW`
+半透明 / 亚克力背景下，ClearType 与 alpha 混合异常，需使用灰度抗锯齿：
 
 ```cpp
-CXEditDW* pEdit = new CXEditDW();
-pEdit->Create(0, 0, 400, 300, hParent);
-pEdit->SetText(L"Hello 💰 世界 😀");
+XC_SetD2dTextAntialiasMode(2);            // 2 = 灰度抗锯齿
+// 0 = 系统默认  1 = ClearType  2 = 灰度抗锯齿  3 = 不抗锯齿
 ```
 
-### `CXVideo`
+`CXBlur` 构造时内部已自动调用 `XC_SetD2dTextAntialiasMode(2)`。
+
+## 快速示例
+
+### CXImageEx
+
+```cpp
+CXImageEx* pImg = new CXImageEx();
+pImg->Create(0, 0, 400, 300, hParent);
+pImg->LoadFromFile(L"D:\\test.avif");
+```
+
+### CXVideo
 
 ```cpp
 CXVideo* pVideo = new CXVideo();
@@ -75,289 +66,71 @@ pVideo->Open(L"D:\\test.mp4");
 pVideo->Play();
 ```
 
-**静态工具: 元信息 + 封面抓取 (无需实例化播放器)**
+### CXEditDW
 
 ```cpp
-// 一次性拿到容器/编码/分辨率/时长/比特率/帧率/文件大小 + 封面 PNG (默认抓第 1 秒关键帧)
-XVideoInfo info{};
-if (CXVideo::GetVideoInfo(L"D:\\test.mp4", &info, 1.0)) {
-    // info.coverPath 已写入 PNG 路径 (默认 %TEMP%\xcgui_video_cover\<hash>.png)
-}
-
-// 仅取封面 (适合文件列表缩略图)
-wchar_t cover[260];
-CXVideo::GetVideoCover(L"D:\\test.mp4", NULL, 1.0, cover, 260);
-
-// 拿系统缓存目录 (用于批量清理)
-wchar_t dir[260];
-CXVideo::GetVideoCacheDir(dir, 260);
+CXEditDW* pEdit = new CXEditDW();
+pEdit->Create(0, 0, 400, 300, hParent);
+pEdit->SetText(L"Hello 💰 世界 😀");
 ```
 
-### `CXImageEx`
+### CXBlur
 
 ```cpp
-CXImageEx* pImg = new CXImageEx();
-pImg->Create(0, 0, 400, 300, hParent);
-pImg->SetFitMode(ximage_fit_contain);
-pImg->SetInterpolation(ximage_interp_lanczos);
-pImg->SetLoop(TRUE);
-pImg->LoadFromFile(L"D:\\test.avif");
+CXBlur* pBlur = new CXBlur();
+pBlur->AttachToWndEx(hWnd);               // Win10 1803+ DComp 路径; 不支持时退回 AttachToWnd
+pBlur->SetTheme(xblur_theme_auto);
 ```
 
-**句柄迁移 / 附加到已有元素 (生命周期受控)**
+### CXShadow
 
 ```cpp
-// 把 CXImageEx 包装附加到外部已建好的 HELE (例如 layout 里现成的占位元素)
-CXImageEx* pImg = new CXImageEx();
-pImg->AttachToEle(hEle);          // 等价 *pImg = hEle
-pImg->LoadFromFile(L"D:\\a.gif");
-
-// 切到另一个元素 — 自动反注册旧事件 + 清 FFmpeg/D2D 资源, 再挂新句柄
-*pImg = hOtherEle;
-
-HELE h = pImg->GetEleHandle();    // 句柄只读访问 (m_hEle private)
-pImg->Detach();                   // 反附加, 包装可重新 Attach; HELE 由父级负责销毁
+CXShadow* pShadow = new CXShadow();
+pShadow->AttachToWnd(hWnd);
+pShadow->SetCornerRadius(8);
 ```
 
-- `~CXImageEx` 为 `protected`: 必须 `new` 堆分配, 禁栈分配 / 外部 `delete`
-- HELE 销毁时 (`XE_DESTROY`) 自动 `delete this` 释放包装; 用户主动 `Detach` 后包装存活待重 Attach
+### CXTooltip / CXLoading / CXCalendarCard
 
-### `CXChatBubbleBox`
+```cpp
+CXTooltip::AddEleTip(hBtn, L"保存当前文档");
+CXLoading::AttachEle(hPanel);
+CXLoading::SetStyle(hPanel, xloading_style_spinner);
+CXCalendarCard::PopupSingle(hWnd, &date, TRUE, xcalendar_theme_auto);
+```
 
-聊天气泡富文本对话框, 基于 `CXLayoutFrame` + `CXEditDW` 封装. 支持发送者/接收者气泡、头像、名称、标签、系统消息、可点击消息、富文本内容、内嵌 UI 对象、点击回调、新消息定位提醒以及聊天数据保存/恢复.
+### CXChatBubbleBox
 
 ```cpp
 CXChatBubbleBox* pChat = new CXChatBubbleBox();
 pChat->Create(0, 0, 480, 600, hParent);
-pChat->EnableNewMessageLocate(TRUE);
-pChat->SetBubbleColor(RGB(0xC8, 0xE6, 0xC9), RGB(0xF5, 0xF5, 0xF5));
-pChat->SetBubbleRoundEx(8, 2, 8, 8);
-
-// 接收方消息
 pChat->SetInsertType(chat_insert_type_receiver);
-pChat->SetInsertUserInfo(L"u_alice", L"Alice", L"D:\\avatar\\alice.png");
-pChat->AddInsertTag(L"u_alice", L"VIP");
 pChat->InsertBubbleBegin();
-pChat->InsertText(L"你好, 这是一条普通文本消息");
-pChat->InsertImage(L"D:\\res\\sample.png");
-pChat->InsertBubbleEnd();
-
-// 发送方消息
-pChat->SetInsertType(chat_insert_type_sender);
-pChat->SetInsertUserInfo(L"u_me", L"我", L"D:\\avatar\\me.png");
-pChat->InsertBubbleBegin();
-pChat->InsertText(L"收到, 我也回一条");
+pChat->InsertText(L"你好");
 pChat->InsertBubbleEnd();
 ```
 
-**事件与持久化**
+## 兼容性
 
-```cpp
-pChat->SetLButtonClickEvent(OnChatLClick);       // 头像 / 名称 / 标签 / 气泡 / 新消息按钮
-pChat->SetRButtonClickEvent(OnChatRClick);
-pChat->SetObjectLoadedEvent(OnChatObjectLoaded); // LoadFromMem / LoadFromFile 后重绑内嵌对象业务事件
+| 系统 | media | uitool |
+|---|---|---|
+| Win11 / Win10 1803+ | D2D + 硬解 | D2D + DComp 亚克力 |
+| Win10 1607~1709 | D2D + 硬解 | D2D + BLURBEHIND |
+| Win7 SP1 | D2D/GDI+ 降级 + 软解 | D2D/GDI+ 兜底 |
 
-CXBytes bytes;
-pChat->SaveToMem(bytes);
-pChat->LoadFromMem(bytes.getPtr(), bytes.size());
-pChat->SaveToFile(L"D:\\chat\\session.bin");
-pChat->LoadFromFile(L"D:\\chat\\session.bin");
+> Win7 须使用 **FFmpeg 4.4.x**（5.x+ 含 `WaitOnAddress`，Win7 加载即崩）。
+
+## 运行时 DLL
+
+仅 `module_xcgui_media` 依赖 FFmpeg。**DLL 不随仓库分发**，请自行下载后放到 `module_xcgui_media/ffmpeg/bin/`（与工程 `@复制文件` 路径一致）。
+
+```
+avcodec-*.dll  avformat-*.dll  avutil-*.dll
+swresample-*.dll  swscale-*.dll  avdevice-*.dll
 ```
 
-- `module_xcgui_chat` 依赖 `module_xcgui_editdw`, 工程中需同时加入 `module_xcgui_chat.h/.cpp` 与 `module_xcgui_editdw.h/.cpp`
-- 内容原子支持 `text` / `image` / `file` / `voice` / `video` / `object`; UI 对象可用 `InsertObjectEx(hObject, key)` 携带恢复标识
-- `demo.cpp` 覆盖样式、插入、事件、持久化、滚动定位、清空与销毁等完整接口示例
-
-### `CXBlur`
-
-**老路径 (ACCENT_ACRYLIC / BLURBEHIND, 全 Win10/11)**
-
-```cpp
-CXBlur* pBlur = new CXBlur();
-pBlur->AttachToWnd(hWnd);
-pBlur->SetTheme(xblur_theme_auto);
-pBlur->SetCornerRadiusEx(16, 16, 0, 0);   // per-corner: 左上 / 右上 / 右下 / 左下
-// 可选: 强制启用系统透明效果 (会写 HKCU 注册表, 详见下文)
-// CXBlur::ForceSystemTransparencyOn(TRUE);
-```
-
-**DComp+WUC 真亚克力路径 (Win10 1803+, 视觉对齐 Win11 Start Menu)**
-
-```cpp
-// 需要 module_xcgui_blur_dcomp.h / .cpp 一起编译
-CXBlur* pBlur = new CXBlur();
-// 可选: 预设主题/参数 (不设则走内置 PoC 默认)
-pBlur->SetTheme(xblur_theme_auto);         // auto / light / dark
-// pBlur->SetTintColor(RGBA(247,248,249,255));  // 浅色 tint
-// pBlur->SetBlurOpacity(0.35f);               // 通透感 0..1
-// pBlur->SetNoise(0.01f);                     // 噪点强度 0..1
-pBlur->AttachToWndEx(hWnd);               // 自动选 dcomp 路径; 不支持时退回 AttachToWnd
-
-// 原生阴影 + 圆角 (Win11 DWM 系统级, 不占客户区)
-CXBlur::EnableNativeShadow(hWnd, TRUE);
-CXBlur::EnableNativeRoundedCorner(hWnd, xblur_corner_round);
-// 可选: 禁 Snap / 禁最大化
-// CXBlur::EnableSnap(hWnd, FALSE);
-// CXBlur::EnableMaximize(hWnd, FALSE);
-```
-
-> `AttachToWndEx` 内部文件: `module_xcgui_blur_dcomp.h` / `module_xcgui_blur_dcomp.cpp`
-> 需与 `module_xcgui_blur.h/.cpp` 一起加入工程.
-
-### `CXShadow`
-
-```cpp
-CXShadow* pShadow = new CXShadow();
-pShadow->AttachToWnd(hWnd);                  // 接管 padding / 透明 / WM_PAINT / NCHITTEST
-pShadow->SetTheme(xshadow_theme_auto);       // 浅/深 跟随系统
-pShadow->SetCornerRadius(8);                 // 圆角逻辑像素 @96 DPI
-// 可选: 调阴影几何
-// pShadow->SetShadowRadius(24);             // blur
-// pShadow->SetShadowOffset(0, 6);           // key 层 dy
-// pShadow->SetBorderWidth(1.0f);            // 1px AA 描边
-```
-
-- AttachToWnd 之外不需任何前置步骤 (透明属性 / padding / 圆角内圈填充由本类负责)
-- 不要再给主窗设 `XWnd_SetRound` / `SetWindowRgn` (HRGN 1-bit 必锯齿, 与 AA 描边冲突)
-- 最大化 / aero snap 自动 ClearPadding 隐藏阴影, 还原后自动恢复
-- `WM_GETMINMAXINFO` 自动把 padding 加到 ptMinTrackSize, 用户配置的最小尺寸不被阴影框吃掉
-
-### `CXTooltip`
-
-鼠标悬停气泡提示 — 全 static API, 内部维护单例共享气泡窗口 + 全局源元素注册表, 同一时刻至多 1 个气泡.
-
-```cpp
-// 最简: 给一个按钮挂提示
-CXTooltip::AddEleTip(hBtn, L"保存当前文档");
-
-// 带语义图标 + 浅色主题 + 强制下方弹出
-CXTooltip::AddEleTipEx(hBtn, L"操作成功",
-    xtooltip_type_success,
-    xtooltip_theme_light);
-CXTooltip::SetArrowSide(hBtn, xtooltip_arrow_side_bottom);
-
-// 行为调优 (全局, 不分元素)
-CXTooltip::SetShowDelay(300);    // 鼠标停留多久后弹 (ms)
-CXTooltip::SetAutoCloseMs(3000); // 弹出后多久自动消失 (0 = 不自动)
-CXTooltip::SetFadeMs(150);       // 渐显/渐隐时长
-
-// 退出前一次清理 (反挂所有源元素事件 + 销毁气泡窗口)
-CXTooltip::Cleanup();
-```
-
-- 弹出窗口设 `WS_EX_TRANSPARENT` 鼠标穿透 + `XWnd_EnableNcaActive(FALSE)` 不抢焦点
-- `xtooltip_arrow_side_auto` (默认): 按鼠标进入源元素哪一边自动选反向; 4 个固定枚举强制锚定
-- 源元素销毁时自动反注册, 不需手动 `DelEleTip`
-
-### `CXLoading`
-
-加载动画 / 旋转指示器 — 3 种宿主形态 × 5 种动画风格 × 4 套主题.
-
-```cpp
-// 形态 1: 元素附加 (在已有元素上覆盖渲染 loading)
-CXLoading::AttachEle(hPanel);
-CXLoading::SetStyle(hPanel, xloading_style_spinner);
-CXLoading::SetText (hPanel, L"加载中...");
-// ...
-CXLoading::Stop  (hPanel);   // 让出 paint, 宿主原内容恢复显示
-CXLoading::Detach(hPanel);   // 完全反附加, 反挂事件
-
-// 形态 2: 窗口附加 (建子元素填满窗口客户区, 自动置顶 + layout_fill)
-CXLoading::AttachWnd(hWnd);  // 会减 XWnd_SetPadding 的内填充; resize 自适应
-CXLoading::SetStyle (hWnd, xloading_style_bars);
-CXLoading::SetTheme (hWnd, xloading_theme_auto);
-// ...
-CXLoading::Stop  (hWnd);     // 自建子元素被 XWidget_Show(FALSE) 隐藏, 不遮窗口内容
-CXLoading::Start (hWnd);     // 再次显示 + 重启动画
-CXLoading::Detach(hWnd);     // 销毁内部子元素, 完全释放
-
-// 形态 3: 自建元素 (返回 HELE, 用户自行控制坐标, 适合做模态遮罩)
-HELE hLoad = CXLoading::Create(0, 0, 200, 200, hParent);
-CXLoading::SetSize         (hLoad, 60, 60);
-CXLoading::SetCornerRadius (hLoad, 12);
-CXLoading::SetAccentColor  (hLoad, RGB(0xFF, 0x99, 0x00));
-```
-
-- 5 风格: `spinner` (圆环 ease 振荡) / `dots` (5 点错峰旋转) / `spokes` (12 辐条衰减) / `pulse` (单圈脉冲) / `bars` (4 胶囊条波动)
-- D2D 主路径 (PathGeometry + round-cap StrokeStyle) — 端帽与笔画严格对齐, sub-pixel 精度
-- GDI+ 兜底自动启用 (`XInitXCGUI(FALSE)` 或低端机), 笔画宽手动 ×dpi 物理化, cap 圆直径与笔画严格等宽
-- `Stop` 对自建元素 (`Create` / `AttachWnd`) 走 `XWidget_Show(FALSE)`, 对外部元素 (`AttachEle`) 走让出 paint
-- 元素/窗口销毁时自动释放 entry (无需显式 `Detach`); 进程退出前调 `CXLoading::Cleanup()` 兜底
-
-### `CXCalendarCard`
-
-日期 / 日期范围选择卡片 — 全 static API, 支持单个月历选日期与双个月历选范围.
-
-```cpp
-// 单日期选择: 可绑定到按钮 / 输入框附近弹出
-xcalendar_datetime_ date = CXCalendarCard::GetToday();
-CXCalendarCard::SetBindEle(hDateBtn, 0, 6);
-if (CXCalendarCard::PopupSingle(hWnd, &date, TRUE, xcalendar_theme_auto)) {
-    XEdit_SetText(hEdit, CXCalendarCard::FormatShortDatePtr(date));
-}
-
-// 日期时间范围选择: 默认限制最大日期为今天
-xcalendar_datetime_ start = CXCalendarCard::GetToday();
-xcalendar_datetime_ end = start;
-if (CXCalendarCard::PopupDouble(hWnd, &start, &end, TRUE, xcalendar_theme_light)) {
-    const wchar_t* beginText = CXCalendarCard::FormatDateTimePtr(start);
-    // start / end 已更新为用户确认的范围
-}
-```
-
-- `PopupSingle` 取消返回 `FALSE`, 确认后把选择结果写回 `pDate`
-- `PopupDouble` 支持今天 / 近7天 / 近15天 / 近30天快捷范围
-- `SetBindEle` / `SetPopupPosition` 控制下一次弹出位置, 超出屏幕会自动调整
-- 主题支持 `xcalendar_theme_dark` / `xcalendar_theme_light` / `xcalendar_theme_auto`
-
-## ⚠️ `CXBlur::ForceSystemTransparencyOn` 修改注册表
-
-强制启用系统 *透明效果* 开关, 让 acrylic 在用户关掉个性化透明时仍能出 blur. **默认 `FALSE` = no-op**, 必须显式传 `TRUE` 才写注册表.
-
-| 项 | 内容 |
-|---|---|
-| 注册表路径 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\EnableTransparency` |
-| 写入值 | `REG_DWORD = 1` |
-| 作用范围 | **当前用户所有 app**, 非进程级 |
-| 退出还原 | `atexit` + `SetConsoleCtrlHandler` 双兜底; `TerminateProcess` / 蓝屏不还原 |
-| OS 要求 | Win10 1803+ / Win11 |
-
-```cpp
-CXBlur::ForceSystemTransparencyOn(TRUE);    // 开 (写注册表)
-CXBlur::ForceSystemTransparencyOn(FALSE);   // 关 / 还原 (默认值)
-```
-
-> 调用 `(TRUE)` 的产品应在用户协议中告知该行为.
-
-## 编译
-
-- MSVC 2015+ (推荐 VS 2022)
-- Windows SDK ≥ 10.0.17763
-- XCGUI ≥ 2025-12 (`module_xcgui_video` 需要 `XDraw_ConvRect`)
-- FFmpeg dev 包 (仅 `video` / `image` 模块需要)
-
-## 模块封装规范
-
-新增封装模块前请阅读 [`炫彩界面库模块封装规范/模块封装规范.md`](./炫彩界面库模块封装规范/模块封装规范.md). 该文档从现有 5 个生产模块 (`editdw` / `video` / `image` / `blur` / `shadow`) 反向提炼, 后续 AI 协作或人工开发新模块时只读此文即可直接动手.
-
-涵盖内容:
-
-- 文件命名 / 头守卫 / `class CX<功能>` 大驼峰约定
-- 头文件骨架与全套 `@` 标签 (`@模块名称` / `@别名` / `@分组` / `@隐藏` / `@复制文件` / `@lib` / `@src` / `@依赖`)
-- 类层级 (`CXBase` → `CXObjectUI` → `CXEle` / `CXShape` / `CXScrollView`) 与必须实现的 5 段样板 (`GetHXCGUI` override / `operator HELE` / `operator HXCGUI` / `operator=`)
-- **DPI 与坐标转换** (新模块开发必读, 5 模块踩坑总结的全部 XCGUI 坐标 API 与高频规则)
-- D2D 主路径 + GDI 兜底的 `OnPaintImpl` 标准分流代码
-- `BkInfo` / 多线程 (`BoundedQueue` + `PushTimeout` 防 UI 卡死锁)
-- 事件系统: 通用走 `XEle_RegEventCPP1`, 业务走 C 风格函数指针 + `void*` 用户数据
-- 头文件依赖陷阱 (`d2d1.h` 必须先于 `module_xcgui.h` 否则 `POINTF` 重定义)
-- 资源链接 (`@lib` + `#pragma comment(lib)` 双写) 与运行时 DLL 拷贝
-- 完整 `module_xcgui_demo.h/.cpp` 模板 (可直接 copy-paste 改名)
-- 中文 `@别名` 命名速查表 (避免与父类同名冲突, 例如 `取播放状态` vs `取状态`)
-
-附带依赖 (新模块编译必需, 已打包同目录):
-
-- `基础模块/` — `module_base.h/.cpp` + `xc_mkStr` 字符串工具
-- `炫彩界面库/` — `module_xcgui.h` / `module_xcgui_class.h` / `xcgui_event.h` + `XCGUI.dll/lib` (x86 / x64)
+- 新版 FFmpeg：<https://www.gyan.dev/ffmpeg/builds/>
+- Win7 须用 **4.4.x**：<https://github.com/GyanD/codexffmpeg/releases/tag/4.4.3>
 
 ## 许可证
 
