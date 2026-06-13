@@ -7,7 +7,7 @@
 | 模块 | 类 | 用途 |
 |---|---|---|
 | [`module_xcgui_media`](./module_xcgui_media/) | `CXImageEx` / `CXVideo` | 图片 + 视频播放，共享 FFmpeg / 渲染内核 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板 |
 
 旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
@@ -109,6 +109,24 @@ pChat->InsertBubbleBegin();
 pChat->InsertText(L"你好");
 pChat->InsertBubbleEnd();
 ```
+
+### CXAccordion
+
+FAQ / 设置分组 / 引导清单用折叠面板，支持分组、图标、徽章、文本或元素内容、展开动画与 `xuitool_theme_` 主题。
+
+```cpp
+CXAccordion* pAcc = new CXAccordion();
+pAcc->Create(hWnd);
+pAcc->SetTheme(xuitool_theme_auto);
+int g = pAcc->AddGroup(L"常见问题");
+int item = pAcc->AddItem(g, L"如何开始使用?", xaccordion_content_text);
+pAcc->SetItemBodyText(item, L"创建账号后按引导完成基础设置即可。");
+pAcc->AdjustLayout();
+pAcc->ExpandItem(item, TRUE);
+// 关闭前: pAcc->DestroyAccordion(); delete pAcc;
+```
+
+完整 API 与事件示例见 [`module_xcgui_uitool/示例/demo_accordion.cpp`](./module_xcgui_uitool/示例/demo_accordion.cpp)。
 
 ## 兼容性
 

@@ -2,7 +2,7 @@
 #define _XCGUI_UITOOL_AGGREGATED_
 //
 // 顶层类 split:
-//   CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur (+ dcomp)
+//   CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur / CXAccordion (+ dcomp)
 // 共有:
 //   module_xcgui_uitool_common.inc      — _XUITool 主题层
 //   module_xcgui_draw_softshadow.inc  — 软阴影描边内核
@@ -33,6 +33,7 @@
 #include "module_xcgui_uitool_shadow.inc"
 #include "module_xcgui_uitool_editdw.cpp"
 #include "module_xcgui_uitool_chat.cpp"
+#include "module_xcgui_uitool_accordion.cpp"
 #include "module_xcgui_uitool_blur.cpp"
 #include "module_xcgui_uitool_blur_dcomp.cpp"
 

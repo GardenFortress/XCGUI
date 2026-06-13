@@ -41,6 +41,7 @@
 //          [5] CXEditDW — DirectWrite 彩色 emoji 编辑框 (原 editdw 模块)
 //          [6] CXBlur — DWM 亚克力 / 磨砂玻璃虚化 (原 blur 模块)
 //          [7] CXChatBubbleBox — IM 聊天气泡富文本对话框 (原 chat 模块)
+//          [8] CXAccordion — 折叠面板 (FAQ / 设置分组 / 引导清单)
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -57,6 +58,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "module_base.h"
@@ -90,6 +92,7 @@ class CXShadow;
 class CXEditDW;
 class CXBlur;
 class CXChatBubbleBox;
+class CXAccordion;
 //@隐藏}
 
 ///<UI 工具集颜色主题 (CXTooltip / CXLoading / CXCalendarCard 共用)
@@ -3601,6 +3604,444 @@ private:
 	xcgui_chat_click_event m_leftClickEvent;
 	xcgui_chat_click_event m_rightClickEvent;
 	xcgui_chat_object_loaded_event m_objectLoadedEvent;
+};
+//@分组}
+
+///<折叠面板展开模式
+//@别名 折叠面板展开模式
+enum xaccordion_expand_mode_
+{
+	//@别名 折叠面板展开模式_单选组内
+	xaccordion_expand_mode_single        = 0, ///<同组仅一项展开 (默认); 标题 check, 展开时自动收起同组其它项
+	//@别名 折叠面板展开模式_多项
+	xaccordion_expand_mode_multiple      = 1, ///<同组可多项展开; 标题 check, 点击可展开/收起
+	//@别名 折叠面板展开模式_全局单选
+	xaccordion_expand_mode_single_global = 2, ///<全局仅一项展开; 标题 check, 展开时自动收起其它组项
+};
+
+///<折叠面板内容类型
+//@别名 折叠面板内容类型
+enum xaccordion_content_type_
+{
+	//@别名 折叠面板内容类型_无
+	xaccordion_content_none    = 0,
+	//@别名 折叠面板内容类型_文本
+	xaccordion_content_text    = 1,
+	//@别名 折叠面板内容类型_元素
+	xaccordion_content_element = 2,
+};
+
+///<折叠面板图标类型
+//@别名 折叠面板图标类型
+enum xaccordion_icon_type_
+{
+	//@别名 折叠面板图标类型_无
+	xaccordion_icon_none            = 0,
+	//@别名 折叠面板图标类型_自定义
+	xaccordion_icon_custom          = 1,
+	//@别名 折叠面板图标类型_状态完成
+	xaccordion_icon_status_done     = 2,
+	//@别名 折叠面板图标类型_状态进行中
+	xaccordion_icon_status_progress = 3,
+	//@别名 折叠面板图标类型_状态未开始
+	xaccordion_icon_status_todo     = 4,
+};
+
+///<折叠面板徽章语义
+//@别名 折叠面板徽章类型
+enum xaccordion_badge_kind_
+{
+	//@别名 折叠面板徽章类型_中性
+	xaccordion_badge_neutral = 0,
+	//@别名 折叠面板徽章类型_成功
+	xaccordion_badge_success = 1,
+	//@别名 折叠面板徽章类型_警告
+	xaccordion_badge_warning = 2,
+	//@别名 折叠面板徽章类型_信息
+	xaccordion_badge_info    = 3,
+	//@别名 折叠面板徽章类型_危险
+	xaccordion_badge_danger  = 4,
+};
+
+///<折叠面板展开指示样式
+//@别名 折叠面板指示样式
+enum xaccordion_indicator_style_
+{
+	//@别名 折叠面板指示样式_文本
+	xaccordion_indicator_text   = 0, ///<+ / - 文本 (默认)
+	//@别名 折叠面板指示样式_箭头
+	xaccordion_indicator_chevron = 1, ///<上下箭头字符占位
+};
+
+///<折叠面板分组标题对齐
+//@别名 折叠面板分组标题对齐
+enum xaccordion_group_title_align_
+{
+	//@别名 折叠面板分组标题对齐_左
+	xaccordion_group_title_align_left   = 0, ///<左对齐 (默认)
+	//@别名 折叠面板分组标题对齐_中
+	xaccordion_group_title_align_center = 1, ///<水平居中
+	//@别名 折叠面板分组标题对齐_右
+	xaccordion_group_title_align_right  = 2, ///<右对齐
+};
+
+//@备注 项展开/收起/点击事件. pbHandled=TRUE 可阻止默认切换 (仅 OnItemClick).
+typedef int (CALLBACK* xaccordion_item_event)(CXAccordion* pAccordion, int nItemId, BOOL* pbHandled);
+//@备注 主题变更后通知
+typedef int (CALLBACK* xaccordion_void_event)(CXAccordion* pAccordion);
+
+struct _XAcc_ThemeColors;
+struct _XAcc_ItemState;
+struct _XAcc_GroupState;
+
+//@分组{ 炫彩折叠面板
+//@备注  继承: CXLayoutFrame, CXScrollView, CXEle, CXWidgetUI, CXObjectUI, CXBase
+//       FAQ / 设置分组 / 引导清单用折叠面板容器. 支持分组、左图标、右徽章、文本或元素内容、
+//       展开动画与 xuitool_theme_ 深/浅主题.
+//@别名  炫彩折叠面板类
+class CXAccordion : public CXLayoutFrame
+{
+public:
+	//@隐藏{
+	CXAccordion();
+	virtual ~CXAccordion();
+	//@隐藏}
+
+//@备注 创建折叠面板根容器; 尺寸由 layout_size_weight 填满父容器, 勿传 rect.
+//@参数 hParent 父容器 (HELE 或 HWINDOW)
+//@返回 根元素句柄
+//@别名  创建()
+	HELE Create(HXCGUI hParent = NULL);
+
+//@备注 主动销毁根布局框架; C++ 状态与字体在 XE_DESTROY / XE_DESTROY_END 中清理.
+//@别名  销毁扩展()
+	void DestroyAccordion();
+
+//@返回 根元素是否有效.
+//@别名  是否有效()
+	BOOL IsValid() const;
+
+//@返回 根元素句柄.
+//@别名  取句柄()
+	HELE GetHandle() const;
+
+	// ===== 主题 =====
+
+//@备注 设置主题 (深/浅/自定义/自动).
+//@别名  置主题()
+	void SetTheme(xuitool_theme_ theme);
+
+//@返回 当前主题.
+//@别名  取主题()
+	xuitool_theme_ GetTheme() const;
+
+//@备注 custom 模式文本色.
+//@别名  置文本颜色()
+	void SetTextColor(COLORREF c);
+
+//@备注 custom 模式卡片背景色.
+//@别名  置背景颜色()
+	void SetBkColor(COLORREF c);
+
+//@备注 custom 模式强调色.
+//@别名  置强调颜色()
+	void SetAccentColor(COLORREF c);
+
+//@备注 卡片圆角, 默认 8.
+//@别名  置圆角()
+	void SetCornerRadius(int r);
+
+	// ===== 行为 =====
+
+//@备注 展开互斥策略 (标题均为 check; 单选模式由代码 CollapseOthers 实现).
+//@别名  置展开模式()
+	void SetExpandMode(xaccordion_expand_mode_ mode);
+
+//@返回 展开模式.
+//@别名  取展开模式()
+	xaccordion_expand_mode_ GetExpandMode() const;
+
+//@备注 是否允许多项同时展开. FALSE=组内单选 (默认), TRUE=组内多选.
+//@别名  置允许多项展开()
+	void SetAllowMultipleExpand(BOOL bAllow);
+
+//@返回 是否允许多项同时展开.
+//@别名  是否允许多项展开()
+	BOOL IsAllowMultipleExpand() const;
+
+//@备注 是否启用展开/收起动画.
+//@别名  启用动画()
+	void SetAnimEnabled(BOOL bEnable);
+
+//@备注 动画时长 (毫秒), 默认 220.
+//@别名  置动画时长()
+	void SetAnimDuration(int ms);
+
+//@备注 右侧展开指示样式 (+/- 或箭头).
+//@别名  置指示样式()
+	void SetIndicatorStyle(xaccordion_indicator_style_ style);
+
+//@备注 内容超出时启用垂直滚动.
+//@别名  启用滚动()
+	void EnableScroll(BOOL bEnable);
+
+//@备注 构建完分组/项后调用, 对最外层执行 XEle_AdjustLayout.
+//@别名  调整布局()
+	void AdjustLayout();
+
+	// ===== 分组 =====
+
+//@备注 添加分组; pTitle 可为空.
+//@返回 分组 ID (>0)
+//@别名  添加分组()
+	int AddGroup(const wchar_t* pTitle = NULL);
+
+//@备注 设置全部分组标题的水平对齐; 已创建的分组会立即更新.
+//@别名  置分组标题对齐()
+	void SetGroupTitleAlign(xaccordion_group_title_align_ align);
+
+//@返回 当前分组标题对齐.
+//@别名  取分组标题对齐()
+	xaccordion_group_title_align_ GetGroupTitleAlign() const;
+
+//@备注 设置组标题.
+//@别名  置分组标题()
+	BOOL SetGroupTitle(int groupId, const wchar_t* pTitle);
+
+//@备注 禁用整组; 组内项不可展开, 已展开项自动收起.
+//@别名  置分组启用()
+	BOOL SetGroupEnabled(int groupId, BOOL bEnabled);
+
+//@返回 分组是否启用.
+//@别名  是否分组启用()
+	BOOL IsGroupEnabled(int groupId) const;
+
+//@备注 删除组及组内全部项.
+//@别名  删除分组()
+	BOOL RemoveGroup(int groupId);
+
+//@备注 清空全部分组与项.
+//@别名  清空分组()
+	void ClearGroups();
+
+//@返回 分组数量.
+//@别名  取分组数量()
+	int GetGroupCount() const;
+
+	// ===== 项 =====
+
+//@备注 添加项 (默认左侧 3.svg 图标).
+//@返回 项 ID (>0)
+//@别名  添加项()
+	int AddItem(int groupId, const wchar_t* pTitle, xaccordion_content_type_ type = xaccordion_content_none);
+
+//@备注 添加项. hIcon: NULL=无图标; 非空=自定义 HIMAGE.
+//@返回 项 ID (>0)
+//@别名  添加项带图标()
+	int AddItem(int groupId, const wchar_t* pTitle, xaccordion_content_type_ type, HIMAGE hIcon);
+
+//@备注 删除项.
+//@别名  删除项()
+	BOOL RemoveItem(int itemId);
+
+//@备注 设置项标题.
+//@别名  置项标题()
+	BOOL SetItemTitle(int itemId, const wchar_t* pTitle);
+
+//@备注 设置文本内容 (自动切换为 text 模式).
+//@别名  置项正文()
+	BOOL SetItemBodyText(int itemId, const wchar_t* pText);
+
+//@备注 设置元素内容; 仅 Reparent 到项内容区, 不修改元素布局; 生命周期由调用方管理.
+//@别名  置项内容元素()
+	BOOL SetItemContentEle(int itemId, HELE hEle);
+
+//@备注 清空项内容.
+//@别名  清空项内容()
+	BOOL ClearItemContent(int itemId);
+
+//@备注 元素内容最小高度 (避免动画测量抖动).
+//@别名  置项内容最小高度()
+	BOOL SetItemContentMinHeight(int itemId, int h);
+
+//@备注 设置左侧图标 (枚举兼容: none=无图标, 其它=默认 3.svg).
+//@别名  置项图标()
+	BOOL SetItemIcon(int itemId, xaccordion_icon_type_ type, HSVG hSvg = NULL);
+
+//@备注 设置左侧图标图片. NULL=无图标; 非空=自定义 HIMAGE.
+//@别名  置项图标图片()
+	BOOL SetItemIconImage(int itemId, HIMAGE hIcon);
+
+//@备注 设置右侧徽章; pText 为空则隐藏.
+//@别名  置项徽章()
+	BOOL SetItemBadge(int itemId, const wchar_t* pText, xaccordion_badge_kind_ kind = xaccordion_badge_neutral);
+
+//@备注 禁用后不可展开 (若所属组已禁用同样不可操作).
+//@别名  置项启用()
+	BOOL SetItemEnabled(int itemId, BOOL bEnabled);
+
+//@返回 项是否启用 (不含组启用状态).
+//@别名  是否项启用()
+	BOOL IsItemEnabled(int itemId) const;
+
+//@返回 组内项数.
+//@别名  取项数量()
+	int GetItemCount(int groupId) const;
+
+	// ===== 展开控制 =====
+
+//@备注 展开项.
+//@别名  展开项()
+	BOOL ExpandItem(int itemId, BOOL bAnimate = TRUE);
+
+//@备注 收起项.
+//@别名  收起项()
+	BOOL CollapseItem(int itemId, BOOL bAnimate = TRUE);
+
+//@备注 切换展开状态.
+//@别名  切换项()
+	BOOL ToggleItem(int itemId, BOOL bAnimate = TRUE);
+
+//@返回 是否已展开.
+//@别名  是否项已展开()
+	BOOL IsItemExpanded(int itemId) const;
+
+//@备注 groupId=0 表示全部组.
+//@别名  收起全部()
+	BOOL CollapseAll(int groupId = 0);
+
+//@备注 single 模式下获取组内当前展开项; 无则 -1.
+//@别名  取已展开项()
+	int GetExpandedItem(int groupId) const;
+
+	// ===== 查询 =====
+
+//@返回 标题行句柄 (高级自定义).
+//@别名  取项标题元素()
+	HELE GetItemHeaderEle(int itemId) const;
+
+//@返回 内容宿主布局句柄.
+//@别名  取项内容宿主()
+	HELE GetItemContentHost(int itemId) const;
+
+	// ===== 事件 =====
+
+//@别名  置项展开事件()
+	void SetOnItemExpand(xaccordion_item_event fn);
+//@别名  置项收起事件()
+	void SetOnItemCollapse(xaccordion_item_event fn);
+//@别名  置项点击事件()
+	void SetOnItemClick(xaccordion_item_event fn);
+//@别名  置主题变更事件()
+	void SetOnThemeChanged(xaccordion_void_event fn);
+
+	//@隐藏{
+	static void CALLBACK AnimaCb(HXCGUI hAnima, int flag);
+	static void CALLBACK AnimaItemProgressCb(HXCGUI hAnimaItem, float pos);
+	void ReleaseFonts();
+	void DetachFonts();
+	void EnsureFonts();
+	void _xacc_ApplyScroll();
+	void _xacc_StopAllAnima(BOOL bReleaseAnima = TRUE);
+	void _xacc_NormalizeItemLayout(_XAcc_ItemState* item);
+	void _xacc_ApplyCollapsedLayout(_XAcc_ItemState* item);
+	void _xacc_ApplyExpandedLayout(_XAcc_ItemState* item);
+	void _xacc_RefreshScrollExtent();
+	void _xacc_UpdateScrollTotalSize();
+	void _xacc_OnWindowClosing();
+	void _xacc_BindOwnerWnd(HWINDOW hWnd);
+	void _xacc_UnbindOwnerWnd();
+	void _xacc_DetachFontRefsFromUi();
+	void _xacc_ReleaseOwnedResources();
+	void _xacc_DetachAllUserContent();
+	void _xacc_DestroyDetachedUserContent();
+	void _xacc_ClearState();
+	void _xacc_OnRootDestroyed();
+	void _xacc_LoadSvgAssets();
+	void _xacc_ReleaseSvgAssets();
+	void _xacc_ApplyItemIcon(_XAcc_ItemState* item, HIMAGE hIcon);
+	void _xacc_ApplyDefaultItemIcon(_XAcc_ItemState* item);
+	HIMAGE _xacc_ResolveItemIcon(const _XAcc_ItemState* item) const;
+	BOOL _xacc_ItemHasIcon(const _XAcc_ItemState* item) const;
+	void InstallEvents();
+	_XAcc_GroupState* FindGroup(int groupId);
+	_XAcc_ItemState* FindItem(int itemId);
+	HELE CreateItemLayout(_XAcc_ItemState* item, HELE hCard);
+	void _xacc_ApplyGroupCardMargin(_XAcc_GroupState* g);
+	void _xacc_ApplyGroupItemGaps(_XAcc_GroupState* g);
+	int _xacc_GroupTitleAlignFlags() const;
+	void _xacc_ApplyGroupTitleAlign(_XAcc_GroupState* g);
+	void _xacc_ApplyAllGroupTitleAlign();
+	void _xacc_ApplyItemContentPadding(_XAcc_ItemState* item);
+	void UpdateItemShell(_XAcc_ItemState* item);
+	void UpdateGroupItemsShell(_XAcc_GroupState* g);
+	void UpdateGroupVisual(_XAcc_GroupState* g);
+	void UpdateItemBadge(_XAcc_ItemState* item);
+	void UpdateItemVisual(_XAcc_ItemState* item);
+	BOOL ClearItemContentEle(_XAcc_ItemState* item);
+	int MeasureItemContentHeight(_XAcc_ItemState* item);
+	void _xacc_ApplyExpandedHeight(_XAcc_ItemState* item);
+	void ApplyItemContentHeight(_XAcc_ItemState* item, int h);
+	void FinishItemAnim(_XAcc_ItemState* item);
+	void RemeasureItem(_XAcc_ItemState* item);
+	void StopItemAnima(_XAcc_ItemState* item, BOOL bReleaseAnima = TRUE);
+	void StartItemAnim(_XAcc_ItemState* item, BOOL expanding, BOOL bInstant);
+	void OnItemAnimaEnd(HXCGUI hAnima, int flag);
+	void CollapseOthers(int itemId, int groupId);
+	void RefreshTheme();
+	void ApplyItemBtnSelectMode(_XAcc_ItemState* item);
+	void ApplyAllItemsBtnSelectMode();
+	void SyncItemBtnCheck(_XAcc_ItemState* item);
+	BOOL IsItemOperable(_XAcc_ItemState* item) const;
+
+	int OnHeaderCheckImpl(HELE hEle, BOOL bCheck, BOOL* pbHandled);
+	int OnItemWrapPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int OnHeaderPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int OnDestroyImpl(HELE hEle, BOOL* pbHandled);
+	int OnDestroyEndImpl(HELE hEle, BOOL* pbHandled);
+	int OnShowImpl(HELE hEle, BOOL bShow, BOOL* pbHandled);
+	int OnSizeImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+	int OnAdjustLayoutEndImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+	static int CALLBACK OnOwnerWndCloseImpl(HWINDOW hWnd, BOOL* pbHandled);
+
+	xuitool_theme_ m_theme;
+	COLORREF m_customText;
+	COLORREF m_customBg;
+	COLORREF m_customAccent;
+	int m_cornerRadius;
+	xaccordion_expand_mode_ m_expandMode;
+	BOOL m_bAnimEnabled;
+	int m_animDurationMs;
+	xaccordion_indicator_style_ m_indicatorStyle;
+	xaccordion_group_title_align_ m_groupTitleAlign;
+	BOOL m_bScrollEnabled;
+	int m_nextGroupId;
+	int m_nextItemId;
+	HFONTX m_hFontTitle;
+	HFONTX m_hFontTitleBold;
+	HFONTX m_hFontBody;
+	HFONTX m_hFontBadge;
+	HFONTX m_hFontIndicator;
+	HFONTX m_hFontGroup;
+	_XAcc_ThemeColors* m_pColors;
+	xaccordion_item_event m_onItemExpand;
+	xaccordion_item_event m_onItemCollapse;
+	xaccordion_item_event m_onItemClick;
+	xaccordion_void_event m_onThemeChanged;
+	BOOL m_programmaticBtnCheck;
+	BOOL m_bRootDestroyed;
+	BOOL m_inAdjustLayoutEndImpl;
+	BOOL m_inLayoutSync;
+	HWINDOW m_hOwnerWnd;
+	HSVG m_hSvgIndCollapsed;
+	HSVG m_hSvgIndExpanded;
+	HSVG m_hSvgDefaultIcon;
+	HIMAGE m_hImgIndCollapsed;
+	HIMAGE m_hImgIndExpanded;
+	HIMAGE m_hImgDefaultIcon;
+	std::unordered_map<int, _XAcc_GroupState*> m_groups;
+	std::unordered_map<int, _XAcc_ItemState*> m_items;
+	//@隐藏}
 };
 //@分组}
 
