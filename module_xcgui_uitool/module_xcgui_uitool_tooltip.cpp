@@ -470,6 +470,7 @@ void EnsureTipWindow()
 	// body 元素 (填满窗口客户区, 接管 paint).
 	g.hTipBody = XEle_Create(0, 0, 1, 1, (HXCGUI)g.hTipWnd);
 	if (g.hTipBody){
+		XUI_EnableCSS(g.hTipBody, FALSE);
 		XEle_EnableBkTransparent(g.hTipBody, TRUE);   // 不让 XCGUI 画默认背景
 		XEle_EnableDrawBorder   (g.hTipBody, FALSE);
 		XEle_EnableDrawFocus    (g.hTipBody, FALSE);

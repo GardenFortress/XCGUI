@@ -225,9 +225,9 @@ void _XCal_ResolveTheme(xuitool_theme_ theme, _XCal_ThemeColors* c)
 	static const wchar_t* kBkPrimaryLight =
 		L"{99:1.9.9;98:16(0)32(1)64(2)2(3);5:2(15)20(1)21(3)26(1)22(4294734118)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4293418527)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4292693275)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(1727820070)23(102)9(4,4,4,4);8:1(16)5(4294967295);8:1(32)5(4294967295);8:1(64)5(4294967295);8:1(2)5(4294967295);}";
 	static const wchar_t* kBkNormalDark =
-		L"{99:1.9.9;98:16(0)32(1)64(2)2(3);5:2(15)20(1)21(3)26(1)22(4281413936)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4282006073)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4282598210)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4282005045)23(255)9(4,4,4,4);8:1(16)5(4292927712);8:1(32)5(4293190368);8:1(64)5(4292532695);8:1(2)5(4285558124);}";
+		L"{99:1.9.9;98:16(0)32(1)64(2)2(3);5:2(15)20(1)21(3)26(1)22(4281413937)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4282006074)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4282598211)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(1513764405)23(90)9(4,4,4,4);8:1(16)5(4292927712);8:1(32)5(4293190368);8:1(64)5(4292532695);8:1(2)5(4285558124);}";
 	static const wchar_t* kBkNormalLight =
-		L"{99:1.9.9;98:16(0)32(1)64(2)2(3);5:2(15)20(1)21(3)26(1)22(4294177263)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4293716711)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4293321696)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4294374899)23(255)9(4,4,4,4);8:1(16)5(4280229663);8:1(32)5(4280229663);8:1(64)5(4280229663);8:1(2)5(4290558905);}";
+		L"{99:1.9.9;98:16(0)32(1)64(2)2(3);5:2(15)20(1)21(3)26(1)22(4294177263)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4293716711)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4293321696)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(3455514099)23(205)9(4,4,4,4);8:1(16)5(4280229663);8:1(32)5(4280229663);8:1(64)5(4280229663);8:1(2)5(4290558905);}";
 	static const wchar_t* kBkRangeDark =
 		L"{99:1.9.9;98:16(0)32(1)64(2)2(0);5:2(15)20(1)21(3)26(1)22(4282920738)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4283380772)23(255)9(4,4,4,4);5:2(15)20(1)21(3)26(1)22(4283709222)23(255)9(4,4,4,4);8:1(16)5(4292927712);8:1(32)5(4293190368);8:1(64)5(4292532695);8:1(2)5(4285558124);}";
 	static const wchar_t* kBkRangeLight =
@@ -316,8 +316,8 @@ void _XCal_StyleButton(HELE hEle, const _XCal_ThemeColors& c, BOOL primary = FAL
 void _XCal_StyleInput(HELE hEle, const _XCal_ThemeColors& c)
 {
 	if (!hEle) return;
-	XEle_EnableBkTransparent(hEle, FALSE);
 	XEle_ClearBkInfo(hEle);
+	XEle_EnableBkTransparent(hEle, TRUE);
 	XEle_SetBkInfo(hEle, c.bkInput);
 	XEle_SetBorderSize(hEle, 4, 0, 24, 0);
 	XEle_SetTextColor(hEle, c.text);
@@ -1289,6 +1289,7 @@ HELE _XCal_CreateCmdButton(_XCal_Ctx* ctx, int x, int y, int w, int h,
 	y += ctx ? ctx->contentOffY : 0;
 	HELE btn = XBtn_Create(x, y, w, h, text, ctx->hWnd);
 	if (!btn) return NULL;
+	XUI_EnableCSS(btn, FALSE);
 	XBtn_SetTypeEx(btn, button_type_default);
 	XBtn_SetTextAlign(btn, textAlignFlag_center | textAlignFlag_vcenter);
 	XEle_SetUserData(btn, (vint)cmd);
@@ -1305,6 +1306,7 @@ HELE _XCal_CreateChildCmdButton(_XCal_Ctx* ctx, HXCGUI hParent, int x, int y, in
 {
 	HELE btn = XBtn_Create(x, y, w, h, text, hParent);
 	if (!btn) return NULL;
+	XUI_EnableCSS(btn, FALSE);
 	XBtn_SetTypeEx(btn, button_type_default);
 	XBtn_SetTextAlign(btn, textAlignFlag_center | textAlignFlag_vcenter);
 	XEle_SetUserData(btn, (vint)cmd);
@@ -1332,6 +1334,7 @@ HELE _XCal_CreateCell(_XCal_Ctx* ctx, int x, int y, int size)
 	y += ctx ? ctx->contentOffY : 0;
 	HELE btn = XBtn_Create(x, y, size, size, L"", ctx->hWnd);
 	if (!btn) return NULL;
+	XUI_EnableCSS(btn, FALSE);
 	XBtn_SetTypeEx(btn, button_type_default);
 	XBtn_SetTextAlign(btn, textAlignFlag_center | textAlignFlag_vcenter);
 	XEle_EnableBkTransparent(btn, TRUE);
@@ -1366,6 +1369,7 @@ HXCGUI _XCal_CreateText(_XCal_Ctx* ctx, int x, int y, int w, int h, const wchar_
 	y += ctx ? ctx->contentOffY : 0;
 	HXCGUI t = XShapeText_Create(x, y, w, h, text ? text : L"", ctx->hWnd);
 	if (!t) return NULL;
+	XUI_EnableCSS(t, FALSE);
 	XShapeText_SetTextColor(t, color);
 	XShapeText_SetTextAlign(t, align);
 	if (useSmallFont && ctx->hFontSmall) XShapeText_SetFont(t, ctx->hFontSmall);
@@ -1389,6 +1393,7 @@ HELE _XCal_CreateEdit(_XCal_Ctx* ctx, int x, int y, int w, int h, BOOL isStart,
 
 	HELE edit = XEdit_Create(0, 0, w, h, (HXCGUI)wrap);
 	if (!edit) return NULL;
+	XUI_EnableCSS(edit, FALSE);
 	_XCal_RegisterEle(ctx, edit);
 	_XCal_StyleInput(edit, ctx->colors);
 	if (ctx->hFont) XEle_SetFont(edit, ctx->hFont);

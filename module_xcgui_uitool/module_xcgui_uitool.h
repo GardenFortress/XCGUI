@@ -42,6 +42,9 @@
 //          [6] CXBlur — DWM 亚克力 / 磨砂玻璃虚化 (原 blur 模块)
 //          [7] CXChatBubbleBox — IM 聊天气泡富文本对话框 (原 chat 模块)
 //          [8] CXAccordion — 折叠面板 (FAQ / 设置分组 / 引导清单)
+//          [9] CXCardPanel — 卡片面板 (组标题 + 圆角卡片, 设置页风格)
+//          [10] CXSteps — 步骤条 (水平/垂直向导进度, 深/浅主题)
+//          [11] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -93,7 +96,21 @@ class CXEditDW;
 class CXBlur;
 class CXChatBubbleBox;
 class CXAccordion;
+class CXCardPanel;
+class CXSteps;
+class CXColorPicker;
 //@隐藏}
+
+//@分组{ 系统环境
+
+//@备注 用 RtlGetVersion 拿真实 OS build 号, 进程内缓存一次, uitool 各子模块共用.
+DWORD XUITool_GetOsBuild();
+
+//@备注 返回 Windows 主版本简化值: 11 / 10 / 8 / 7, 无法识别返回 0.
+//@别名 取系统版本()
+int GetCurrentVersion();
+
+//@分组}
 
 ///<UI 工具集颜色主题 (CXTooltip / CXLoading / CXCalendarCard 共用)
 //@别名 UI工具主题
@@ -796,6 +813,128 @@ public:
 };
 //@分组}
 
+// =====================================================================
+// CXColorPicker — 现代颜色选择器
+// =====================================================================
+
+///<颜色 RGBA 结构 (各分量 0~255)
+//@别名 颜色RGBA
+struct xcolor_rgba_
+{
+	//@别名 红
+	BYTE r;
+	//@别名 绿
+	BYTE g;
+	//@别名 蓝
+	BYTE b;
+	//@别名 透明
+	BYTE a;
+};
+
+///<颜色输入模式 (HEX / RGB / HSL 切换)
+//@别名 颜色输入模式
+enum xcolor_input_mode_
+{
+	//@别名 颜色输入_RGB
+	xcolor_input_rgb = 0,
+	//@别名 颜色输入_HSL
+	xcolor_input_hsl = 1,
+	//@别名 颜色输入_HEX
+	xcolor_input_hex = 2,
+};
+
+///<颜色变更阶段 (实时预览 / 确认提交)
+//@别名 颜色变更阶段
+enum xcolor_change_phase_
+{
+	//@别名 颜色变更_实时
+	xcolor_change_live   = 0,
+	//@别名 颜色变更_提交
+	xcolor_change_commit = 1,
+};
+
+// =================================================================
+// 颜色选择器事件回调 (C 风格函数指针 + void* 用户数据, 炫语言侧可直接传函数名)
+// =================================================================
+//@别名  颜色选择器回调_颜色变更
+typedef int (*XCOLOR_PICKER_PROC_CHANGED)(xcolor_rgba_ color,
+	xcolor_change_phase_ phase, void* pUserData);
+
+//@分组{ 颜色选择器
+//@备注  现代风格颜色选择弹窗, 全静态方法. 支持 SV 面板 + 色相条 + Alpha 条拖拽、
+//       RGB 通道输入与 Spin 微调、深浅主题与软阴影. Popup 确认后写回 xcolor_rgba_.
+//       用法: CXColorPicker::SetBindEle(hBtn, 0, 4);
+//             CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto);
+//@别名  炫彩颜色选择器类
+class CXColorPicker
+{
+public:
+
+	// ===== 弹出 =====
+
+//@备注 设置下一次弹出的绑定元素位置 (元素左下角 + 偏移).
+//@参数 hEle 绑定元素
+//@参数 offsetX 横向偏移
+//@参数 offsetY 纵向偏移
+//@别名  置绑定元素()
+	static void SetBindEle(HELE hEle, int offsetX = 0, int offsetY = 0);
+
+//@备注 设置下一次弹出的屏幕坐标.
+//@参数 pt 屏幕坐标
+//@别名  置弹出位置()
+	static void SetPopupPosition(POINT pt);
+
+//@备注 设置下一次弹出是否失焦自动关闭. 默认 TRUE; FALSE 时仅能通过取消/确认/×/Esc 关闭.
+//@参数 bEnable 是否启用失焦自动关闭
+//@别名  置启用自动关闭()
+	static void SetEnableAutoClose(BOOL bEnable);
+
+//@备注 弹出颜色选择器. 确认返回 TRUE 并写回 *pColor; 取消返回 FALSE.
+//@参数 hParent 父窗口, 可为 NULL
+//@参数 pColor 输入初始颜色并接收结果
+//@参数 bShowAlpha 是否显示 Alpha 条与 A 通道
+//@参数 theme UI工具主题 (推荐 dark / light / auto)
+//@参数 nCornerRadius 弹窗圆角
+//@参数 bLiveNotify 拖拽中是否触发 OnColorChanged (P2)
+//@参数 initialMode 默认输入模式 HEX / RGB / HSL
+//@别名  弹出颜色选择器()
+	static BOOL Popup(HWINDOW hParent, xcolor_rgba_* pColor,
+		BOOL bShowAlpha = TRUE, xuitool_theme_ theme = xuitool_theme_auto,
+		int nCornerRadius = 8, BOOL bLiveNotify = TRUE,
+		xcolor_input_mode_ initialMode = xcolor_input_hex);
+
+	// ===== 回调 (P2 完整接入) =====
+
+//@备注 设置颜色变更回调 (可选, Popup 前调用).
+//@参数 proc 回调函数, NULL 清除
+//@参数 pUserData 用户数据
+//@别名  置颜色变更回调()
+	static void SetOnColorChanged(XCOLOR_PICKER_PROC_CHANGED proc, void* pUserData = NULL);
+
+	// ===== 颜色工具 =====
+
+//@备注 构造 RGBA 颜色.
+//@别名  构造RGBA()
+	static xcolor_rgba_ Rgb(BYTE r, BYTE g, BYTE b, BYTE a = 255);
+
+//@备注 从 XCGUI COLORREF (ARGB) 转换.
+//@别名  从COLORREF()
+	static xcolor_rgba_ FromCOLORREF(COLORREF c);
+
+//@备注 转为 XCGUI COLORREF (ARGB, alpha 须 255 或按 a 写入高字节).
+//@别名  到COLORREF()
+	static COLORREF ToCOLORREF(xcolor_rgba_ c);
+
+//@备注 格式化为 #RRGGBB；含透明且 a&lt;255 时为 #AARRGGBB（与双击复制、RGBA 宏一致）.
+//@别名  格式化十六进制()
+	static CXText FormatHex(xcolor_rgba_ c, BOOL withAlpha = TRUE);
+
+//@备注 解析十六进制颜色 (#RGB / #RRGGBB / #AARRGGBB, 可省略 #).
+//@别名  解析十六进制()
+	static BOOL ParseHex(const wchar_t* text, xcolor_rgba_* out);
+};
+//@分组}
+
 // =================================================================
 // CXShadow / CXEditDW / CXBlur — 自原独立模块并入 (P0-4)
 // =================================================================
@@ -881,60 +1020,10 @@ public:
 //@别名  取圆角()
     int GetCornerRadius() const;
 
-    // ===== 阴影 =====
-//@备注 设置阴影模糊半径. Gaussian blur 标准差近似. 单位 = 逻辑像素.
-//      值越大阴影越柔越远. Win11 默认 16. 传 0 = 不模糊 (硬边阴影).
-//@参数 radius 模糊半径 (逻辑像素).
-//@别名  置阴影模糊半径()
-    void SetShadowRadius(int radius);
-
-//@备注 取阴影模糊半径 (逻辑像素).
-//@别名  取阴影模糊半径()
-    int GetShadowRadius() const;
-
-//@备注 设置阴影扩散. 类似 CSS box-shadow 的第三个长度参数. 阴影源矩形向外膨胀
-//      此值后再应用 blur. 默认 0. 单位 = 逻辑像素.
-//@参数 spread 扩散 (逻辑像素).
-//@别名  置阴影扩散()
-    void SetShadowSpread(int spread);
-
-//@备注 取阴影扩散 (逻辑像素).
-//@别名  取阴影扩散()
-    int GetShadowSpread() const;
-
-//@备注 设置阴影偏移. (dx, dy) 单位 = 逻辑像素. Win11 默认 (0, 4) (轻微下沉).
-//      正 dx 阴影向右; 正 dy 阴影向下.
-//@参数 dx X 偏移 (逻辑像素).
-//@参数 dy Y 偏移 (逻辑像素).
-//@别名  置阴影偏移()
-    void SetShadowOffset(int dx, int dy);
-
-//@备注 取阴影偏移 (逻辑像素). pdx / pdy 可为 NULL.
-//@参数 pdx 接收 X 偏移.
-//@参数 pdy 接收 Y 偏移.
-//@别名  取阴影偏移()
-    void GetShadowOffset(int* pdx, int* pdy) const;
-
-//@备注 设置阴影颜色. RGBA, alpha 高字节, XCGUI 标准编码 0xAABBGGRR.
-//      默认 0x40000000 (黑 25% alpha).
-//@参数 color 阴影色.
-//@别名  置阴影色()
-    void SetShadowColor(COLORREF color);
-
-//@备注 取阴影色.
-//@别名  取阴影色()
-    COLORREF GetShadowColor() const;
-
-//@备注 设置主窗口失活时的阴影色. 主窗口失去焦点 (WM_ACTIVATE = WA_INACTIVE)
-//      自动切换到此色, 重新激活恢复. 默认 0x20000000 (黑 12% alpha).
-//      若不希望区分激活态, 设为与 SetShadowColor 相同值.
-//@参数 color 阴影色 (失活态).
-//@别名  置失活阴影色()
-    void SetInactiveShadowColor(COLORREF color);
-
-//@备注 取失活阴影色.
-//@别名  取失活阴影色()
-    COLORREF GetInactiveShadowColor() const;
+    // ===== 外晕 (halo) =====
+//@备注 外圈软阴影由 _XUITool::DrawDropShadow 绘制 (与 CXCalendarCard / CXTooltip
+//      同内核), 视觉强度与偏移由 xshadow_theme_* 决定, **不支持** 单独设置 halo
+//      颜色 / 模糊半径 / 扩散 / 偏移. 可调: SetTheme / SetGlobalTheme.
 
     // ===== 圆角描边 (Win11 风格 stroke) =====
 //@备注 设置圆角描边色. RGBA, 默认 0x33000000 (黑 20% alpha, Win11 风格).
@@ -958,22 +1047,10 @@ public:
 //@别名  取描边宽()
     float GetBorderWidth() const;
 
-    // ===== 圆角内扣修正 =====
-//@备注 设置 *圆角内扣* 像素数 (覆盖主窗硬直角的修正量). 单位 = 物理像素.
-//      默认 1. 增大可在大圆角 + 大模糊场景下消除主窗口边缘锯齿露出, 但
-//      会有 1~2px 边缘色与主窗口内容混色 (取决于阴影色 alpha). 0 = 不修正.
-//@参数 px 内扣像素 (物理像素, 不随 DPI 缩放, 与位图本身锯齿对应).
-//@别名  置内扣修正()
-    void SetInsetCorrection(int px);
-
-//@备注 取内扣修正像素数.
-//@别名  取内扣修正()
-    int GetInsetCorrection() const;
-
     // ===== 主题 =====
-//@备注 应用主题预设. light = 浅色背景下的暖灰阴影; dark = 深色背景下的强阴影;
-//      auto = 根据系统亮/暗模式自动选. 主题会同时调整 shadow color / border color /
-//      inactive shadow color, 不改变 radius / spread / offset / corner.
+//@备注 应用主题预设. light / dark / auto 同时调整外晕强度 (DrawDropShadow) 与
+//      描边色; auto 跟随系统 AppsUseLightTheme. 未自定义内圈填充时同步更新
+//      内圈默认色 (浅 #f3f3f3 / 深 #202020). 不改变圆角半径.
 //@参数 theme 见 xshadow_theme_*.
 //@别名  置主题()
     void SetTheme(int theme);
@@ -990,22 +1067,22 @@ public:
 //@别名  取全局主题()
     static int  GetGlobalTheme();
 
-    // ===== 内圈背景填充 =====
-//@备注 设置内圈背景色. 本类接管了主窗 WM_PAINT, 默认按主题 (light/dark/auto) 填一个
-//      不透明背景, 调本函数可覆盖. 颜色 = 0xAABBGGRR XCGUI 标准;
-//      alpha = 0 等价 ClearInnerBgColor (仅画阴影+描边, 内圈透明).
-//      推荐: light 主题 RGBA(252,252,252,255), dark 主题 RGBA(32,32,32,255).
-//      最大化状态下全矩面填该色 (此时 padding 已去, 主窗 = 全屏内圈).
-//@参数 color 0xAABBGGRR 背景色.
-//@别名  置内圈背景色()
+    // ===== 内圈填充 =====
+//@备注 设置内圈填充色 (主窗内容区圆角矩形背景). 本类接管 WM_PAINT 后由本类绘制
+//      该层; 未调用时按主题默认: 深色 #202020, 浅色 #f3f3f3 (auto 跟随系统).
+//      颜色 = 0xAABBGGRR XCGUI 标准; alpha=0 时内圈透明 (仅外晕+描边).
+//      SetTheme 在未自定义时同步刷新默认色; ClearInnerBgColor 恢复主题默认.
+//      最大化时全窗口矩形填该色 (padding 已清, 主窗 = 全屏内圈).
+//@参数 color 0xAABBGGRR 填充色.
+//@别名  置内圈填充色()
     void SetInnerBgColor(COLORREF color);
 
-//@备注 取消用户自定义背景, 退回主题默认. 调 SetTheme 后会同步重置为主题默认色.
-//@别名  清除内圈背景色()
+//@备注 取消用户自定义内圈填充, 恢复当前主题默认 (#202020 / #f3f3f3).
+//@别名  清除内圈填充色()
     void ClearInnerBgColor();
 
-//@备注 取当前生效的内圈背景色 (用户自定义 或 主题默认).
-//@别名  取内圈背景色()
+//@备注 取当前生效的内圈填充色 (用户自定义或主题默认).
+//@别名  取内圈填充色()
     COLORREF GetInnerBgColor() const;
 
     // ===== 控制 =====
@@ -1189,23 +1266,14 @@ private:
 
     // ===== 视觉参数 (逻辑像素 @ 96 DPI) =====
     //
-    // halo 由 DrawDropShadow 绘制 (calendar 风格); 下列 setter 保留 API 兼容,
-    // radius/spread/offset 不再影响 margin (固定 kShadowMargin).
+    // halo: DrawDropShadow + xshadow_theme_* (固定 kShadowMargin, 不可 per-instance 定制).
     std::atomic<int>      m_cornerRadius  {8};
-    std::atomic<int>      m_shadowRadius  {24};        // = key.blur (logical px)
-    std::atomic<int>      m_shadowSpread  {0};
-    std::atomic<int>      m_shadowDx      {0};
-    std::atomic<int>      m_shadowDy      {6};         // = key.dy
-    std::atomic<COLORREF> m_shadowColor   {0x1A000000u};   // 10% 黑 (light active key)
-    std::atomic<COLORREF> m_inactiveShadow{0x0E000000u};   //  5.5% 黑 (light inactive)
-    std::atomic<COLORREF> m_borderColor   {0x0F000000u};   //  6% 黑 (light stroke)
+    std::atomic<COLORREF> m_borderColor   {0x0F000000u};   // ApplyThemePreset 覆盖
     std::atomic<float>    m_borderWidth   {1.0f};
-    std::atomic<int>      m_inset         {0};
     std::atomic<int>      m_theme         {xshadow_theme_auto};   // 默认跟随系统
 
-    // 内圈背景. m_innerBgUserSet=true → 用 m_innerBgColor;
-    // false → ApplyThemePreset 根据当前 theme 算一个默认值写进 m_innerBgColor.
-    std::atomic<COLORREF> m_innerBgColor  {0xFFFCFCFCu};   // light 主题默认 (FCFCFC 不透明)
+    // 内圈填充. m_innerBgUserSet=true → m_innerBgColor; false → #202020 / #f3f3f3.
+    std::atomic<COLORREF> m_innerBgColor  {0xFF202020u};   // 深 #202020, Attach 时按主题刷新
     std::atomic<bool>     m_innerBgUserSet{false};
 
 public:
@@ -2282,35 +2350,6 @@ private:
 //@隐藏}
 };
 //@分组}
-
-//@隐藏{
-DWORD XBlur_GetOsBuild();  // 进程内缓存 OS build, dcomp 模块共用
-//@隐藏}
-
-//@别名 取系统版本()
-static inline int GetCurrentVersion() {
-    DWORD build = XBlur_GetOsBuild();
-    if (build >= 22000) return 11;
-    if (build >= 10240) return 10;
-    // build 无法区分 Win7/8/8.1, 回退 RtlGetVersion 读 major/minor
-    HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
-    if (hMod) {
-        typedef LONG(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hMod, "RtlGetVersion");
-        if (RtlGetVersion) {
-            RTL_OSVERSIONINFOW osvi = { 0 };
-            osvi.dwOSVersionInfoSize = sizeof(osvi);
-            if (RtlGetVersion(&osvi) == 0) {
-                DWORD major = osvi.dwMajorVersion;
-                DWORD minor = osvi.dwMinorVersion;
-                if (major == 10) return 10;
-                if (major == 6 && minor >= 2) return 8;
-                if (major == 6 && minor == 1) return 7;
-            }
-        }
-    }
-    return 0;
-}
 
 //@隐藏{
 class CXBlur;
@@ -3943,7 +3982,8 @@ public:
 	void EnsureFonts();
 	void _xacc_ApplyScroll();
 	void _xacc_StopAllAnima(BOOL bReleaseAnima = TRUE);
-	void _xacc_NormalizeItemLayout(_XAcc_ItemState* item);
+	void _xacc_NormalizeItemLayout(_XAcc_ItemState* item, BOOL measureCollapsed = TRUE);
+	void _xacc_OnSizeSync();
 	void _xacc_ApplyCollapsedLayout(_XAcc_ItemState* item);
 	void _xacc_ApplyExpandedLayout(_XAcc_ItemState* item);
 	void _xacc_RefreshScrollExtent();
@@ -4032,6 +4072,7 @@ public:
 	BOOL m_bRootDestroyed;
 	BOOL m_inAdjustLayoutEndImpl;
 	BOOL m_inLayoutSync;
+	BOOL m_inSizeImpl;
 	HWINDOW m_hOwnerWnd;
 	HSVG m_hSvgIndCollapsed;
 	HSVG m_hSvgIndExpanded;
@@ -4041,6 +4082,527 @@ public:
 	HIMAGE m_hImgDefaultIcon;
 	std::unordered_map<int, _XAcc_GroupState*> m_groups;
 	std::unordered_map<int, _XAcc_ItemState*> m_items;
+	//@隐藏}
+};
+//@分组}
+
+///<卡片面板分组标题对齐
+//@别名 卡片面板分组标题对齐
+enum xcardpanel_group_title_align_
+{
+	//@别名 卡片面板分组标题对齐_左
+	xcardpanel_group_title_align_left   = 0, ///<左对齐 (默认)
+	//@别名 卡片面板分组标题对齐_中
+	xcardpanel_group_title_align_center = 1, ///<水平居中
+	//@别名 卡片面板分组标题对齐_右
+	xcardpanel_group_title_align_right  = 2, ///<右对齐
+};
+
+//@备注 主题变更后通知
+typedef int (CALLBACK* xcardpanel_void_event)(CXCardPanel* pPanel);
+
+struct _XCard_ThemeColors;
+struct _XCard_GroupState;
+
+//@分组{ 炫彩卡片面板
+//@备注  继承: CXLayoutFrame, CXScrollView, CXEle, CXWidgetUI, CXObjectUI, CXBase
+//       设置页 / 分组表单用「组标题 + 圆角卡片」容器. 每组一张卡片, 内容由调用方插入;
+//       支持 xuitool_theme_ 深/浅主题与四角圆角.
+//@别名  炫彩卡片面板类
+class CXCardPanel : public CXLayoutFrame
+{
+public:
+	//@隐藏{
+	CXCardPanel();
+	virtual ~CXCardPanel();
+	//@隐藏}
+
+//@备注 创建卡片面板根容器; 尺寸由 layout 填满父容器, 勿传 rect.
+//@参数 hParent 父容器 (HELE 或 HWINDOW)
+//@返回 根元素句柄
+//@别名  创建()
+	HELE Create(HXCGUI hParent = NULL);
+
+//@备注 主动销毁根布局框架; C++ 状态与字体在 XE_DESTROY / XE_DESTROY_END 中清理.
+//@别名  销毁扩展()
+	void DestroyCardPanel();
+
+//@返回 根元素是否有效.
+//@别名  是否有效()
+	BOOL IsValid() const;
+
+//@返回 根元素句柄.
+//@别名  取句柄()
+	HELE GetHandle() const;
+
+	// ===== 主题 =====
+
+//@备注 设置主题 (深/浅/自定义/自动).
+//@别名  置主题()
+	void SetTheme(xuitool_theme_ theme);
+
+//@返回 当前主题.
+//@别名  取主题()
+	xuitool_theme_ GetTheme() const;
+
+//@备注 custom 模式组标题文本色.
+//@别名  置文本颜色()
+	void SetTextColor(COLORREF c);
+
+//@备注 custom 模式卡片背景色 (默认深 #262626 / 浅 #FFFFFF).
+//@别名  置背景颜色()
+	void SetBkColor(COLORREF c);
+
+//@备注 custom 模式强调色 (预留).
+//@别名  置强调颜色()
+	void SetAccentColor(COLORREF c);
+
+//@备注 卡片四角统一圆角, 默认 8.
+//@别名  置圆角()
+	void SetCornerRadius(int r);
+
+//@备注 卡片四角分别设置圆角.
+//@别名  置圆角扩展()
+	void SetCornerRadiusEx(int tl, int tr, int br, int bl);
+
+	// ===== 行为 =====
+
+//@备注 内容超出时启用垂直滚动.
+//@别名  启用滚动()
+	void EnableScroll(BOOL bEnable);
+
+//@备注 构建完分组/内容后调用, 对最外层执行 XEle_AdjustLayout.
+//@别名  调整布局()
+	void AdjustLayout();
+
+	// ===== 分组 =====
+
+//@备注 添加分组 (组外标题 + 一张卡片); pTitle 可为空.
+//@返回 分组 ID (>0)
+//@别名  添加分组()
+	int AddGroup(const wchar_t* pTitle = NULL);
+
+//@备注 设置全部分组标题的水平对齐; 已创建的分组会立即更新.
+//@别名  置分组标题对齐()
+	void SetGroupTitleAlign(xcardpanel_group_title_align_ align);
+
+//@返回 当前分组标题对齐.
+//@别名  取分组标题对齐()
+	xcardpanel_group_title_align_ GetGroupTitleAlign() const;
+
+//@备注 设置组标题.
+//@别名  置分组标题()
+	BOOL SetGroupTitle(int groupId, const wchar_t* pTitle);
+
+//@备注 禁用整组 (卡片与标题变灰, 卡片不可交互).
+//@别名  置分组启用()
+	BOOL SetGroupEnabled(int groupId, BOOL bEnabled);
+
+//@返回 分组是否启用.
+//@别名  是否分组启用()
+	BOOL IsGroupEnabled(int groupId) const;
+
+//@备注 删除组 (不 Destroy 用户内容元素).
+//@别名  删除分组()
+	BOOL RemoveGroup(int groupId);
+
+//@备注 清空全部分组.
+//@别名  清空分组()
+	void ClearGroups();
+
+//@返回 分组数量.
+//@别名  取分组数量()
+	int GetGroupCount() const;
+
+	// ===== 内容 =====
+
+//@备注 设置卡片内容 (清空后挂载单个 HELE / XShape). 已有父时先 Remove / RemoveShape 再 AddChild.
+//@别名  置分组内容元素()
+	BOOL SetGroupContentEle(int groupId, HXCGUI hObj);
+
+//@备注 追加卡片内容 (不清空已有项). 连续添加多个按钮等场景用本接口, 勿重复调 SetGroupContentEle.
+//@别名  添加分组内容元素()
+	BOOL AddGroupContentEle(int groupId, HXCGUI hObj);
+
+//@备注 清空卡片内容 (仅 Remove, 不 Destroy).
+//@别名  清空分组内容()
+	BOOL ClearGroupContent(int groupId);
+
+//@备注 卡片最小高度, 默认 46; h<=0 恢复默认.
+//@别名  置分组最小高度()
+	BOOL SetGroupMinHeight(int groupId, int h);
+
+//@返回 卡片壳布局句柄 hItemWrap (高级自定义).
+//@别名  取分组内容宿主()
+	HELE GetGroupContentHost(int groupId) const;
+
+	// ===== 事件 =====
+
+//@别名  置主题变更事件()
+	void SetOnThemeChanged(xcardpanel_void_event fn);
+
+	//@隐藏{
+	void ReleaseFonts();
+	void DetachFonts();
+	void EnsureFonts();
+	void _xcard_ApplyScroll();
+	void _xcard_DetachFontRefsFromUi();
+	void _xcard_ReleaseOwnedResources();
+	void _xcard_DetachAllUserContent();
+	void _xcard_DestroyDetachedUserContent();
+	void _xcard_ClearState();
+	void _xcard_OnRootDestroyed();
+	void _xcard_UpdateScrollTotalSize();
+	void InstallEvents();
+	_XCard_GroupState* FindGroup(int groupId);
+	int _xcard_GroupTitleAlignFlags() const;
+	void _xcard_ApplyGroupTitleAlign(_XCard_GroupState* g);
+	void _xcard_ApplyAllGroupTitleAlign();
+	void _xcard_ApplyItemWrapMinHeight(_XCard_GroupState* g);
+	void _xcard_ApplyGroupTitleMargin(_XCard_GroupState* g);
+	void _xcard_GetCornerRadii(int* tl, int* tr, int* br, int* bl) const;
+	HELE _xcard_CreateItemWrap(_XCard_GroupState* g);
+	void UpdateGroupVisual(_XCard_GroupState* g);
+	void _xcard_RefreshGroupLayout(_XCard_GroupState* g);
+	BOOL _xcard_AttachGroupContent(_XCard_GroupState* g, HXCGUI h, BOOL bReplace);
+	BOOL ClearGroupContentEle(_XCard_GroupState* g);
+	void RefreshTheme();
+
+	int OnItemWrapPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int OnItemWrapPaintEndImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int OnDestroyImpl(HELE hEle, BOOL* pbHandled);
+	int OnDestroyEndImpl(HELE hEle, BOOL* pbHandled);
+	int OnShowImpl(HELE hEle, BOOL bShow, BOOL* pbHandled);
+	int OnSizeImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+	int OnAdjustLayoutEndImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+
+	xuitool_theme_ m_theme;
+	COLORREF m_customText;
+	COLORREF m_customBg;
+	COLORREF m_customAccent;
+	int m_cornerRadius;
+	int m_cornerTL;
+	int m_cornerTR;
+	int m_cornerBR;
+	int m_cornerBL;
+	BOOL m_bCornerIndividual;
+	xcardpanel_group_title_align_ m_groupTitleAlign;
+	BOOL m_bScrollEnabled;
+	int m_nextGroupId;
+	HFONTX m_hFontGroup;
+	_XCard_ThemeColors* m_pColors;
+	xcardpanel_void_event m_onThemeChanged;
+	BOOL m_bRootDestroyed;
+	BOOL m_inAdjustLayoutEndImpl;
+	BOOL m_inLayoutSync;
+	std::unordered_map<int, _XCard_GroupState*> m_groups;
+	//@隐藏}
+};
+//@分组}
+
+///<步骤条布局方向
+//@别名 步骤条方向
+enum xsteps_orientation_
+{
+	//@别名 步骤条方向_水平
+	xsteps_orient_horizontal = 0, ///<水平 (默认)
+	//@别名 步骤条方向_垂直
+	xsteps_orient_vertical   = 1, ///<垂直
+};
+
+///<步骤条标签与文本相对顺序 (水平: 上/下; 垂直: 左/右)
+//@别名 步骤条内容顺序
+enum xsteps_content_order_
+{
+	//@别名 步骤条内容顺序_标签在前
+	xsteps_content_label_first = 0, ///<标签在前 (水平: 圆在上; 垂直: 圆在左)
+	//@别名 步骤条内容顺序_文本在前
+	xsteps_content_text_first  = 1, ///<文本在前 (水平: 文在上; 垂直: 文在左)
+};
+
+///<单步状态 (默认由 SetCurrentStep 推导; SetStepStatus 可逐步覆盖)
+//@别名 步骤条状态
+enum xsteps_status_
+{
+	//@别名 步骤条状态_等待
+	xsteps_status_wait    = 0, ///<未到达
+	//@别名 步骤条状态_进行中
+	xsteps_status_process = 1, ///<当前步
+	//@别名 步骤条状态_完成
+	xsteps_status_finish  = 2, ///<已完成
+};
+
+//@备注 点击步骤回调
+typedef int (CALLBACK* xsteps_step_event)(CXSteps* pSteps, int nStepId, BOOL* pbHandled);
+//@备注 主题变更后通知
+typedef int (CALLBACK* xsteps_void_event)(CXSteps* pSteps);
+
+struct _XSteps_ThemeColors;
+struct _XSteps_StepState;
+
+//@分组{ 炫彩步骤条
+//@备注  继承: CXLayoutFrame, CXScrollView, CXEle, CXWidgetUI, CXObjectUI, CXBase
+//       向导 / 下单流程等多步进度指示. 支持水平/垂直、深浅主题、数字/图标标签、
+//       完成态图标与标签/文本位置调换.
+//@别名  炫彩步骤条类
+class CXSteps : public CXLayoutFrame
+{
+public:
+	//@隐藏{
+	CXSteps();
+	virtual ~CXSteps();
+	//@隐藏}
+
+//@备注 创建步骤条根容器; 尺寸由 layout 填满父容器, 勿传 rect.
+//@参数 hParent 父容器 (HELE 或 HWINDOW)
+//@返回 根元素句柄
+//@别名  创建()
+	HELE Create(HXCGUI hParent = NULL);
+
+//@备注 主动销毁根布局框架; C++ 状态与字体在 XE_DESTROY / XE_DESTROY_END 中清理.
+//@别名  销毁扩展()
+	void DestroySteps();
+
+//@返回 根元素是否有效.
+//@别名  是否有效()
+	BOOL IsValid() const;
+
+//@返回 根元素句柄.
+//@别名  取句柄()
+	HELE GetHandle() const;
+
+	// ===== 主题 =====
+
+//@备注 设置主题 (深/浅/自定义/自动).
+//@别名  置主题()
+	void SetTheme(xuitool_theme_ theme);
+
+//@返回 当前主题.
+//@别名  取主题()
+	xuitool_theme_ GetTheme() const;
+
+//@备注 custom 模式步骤文本色.
+//@别名  置文本颜色()
+	void SetTextColor(COLORREF c);
+
+//@备注 custom 模式背景基色; 影响深色主题下圆底/等待文本的叠底预混合.
+//@别名  置背景颜色()
+	void SetBkColor(COLORREF c);
+
+//@备注 custom 模式强调色 (活动圆/已完成连接段).
+//@别名  置强调颜色()
+	void SetAccentColor(COLORREF c);
+
+	// ===== 布局 =====
+
+//@备注 设置水平/垂直布局; 已创建步骤会刷新 layout.
+//@别名  置方向()
+	void SetOrientation(xsteps_orientation_ orient);
+
+//@返回 当前布局方向.
+//@别名  取方向()
+	xsteps_orientation_ GetOrientation() const;
+
+//@备注 设置标签与文本相对顺序 (水平: 上/下; 垂直: 左/右).
+//@别名  置内容顺序()
+	void SetContentOrder(xsteps_content_order_ order);
+
+//@返回 当前内容顺序.
+//@别名  取内容顺序()
+	xsteps_content_order_ GetContentOrder() const;
+
+//@备注 是否启用 SetCurrentStep 切换时的连接段/节点过渡动画.
+//@别名  启用过渡动画()
+	void SetAnimEnabled(BOOL bEnable);
+
+//@返回 是否启用过渡动画.
+//@别名  是否启用过渡动画()
+	BOOL IsAnimEnabled() const;
+
+//@备注 过渡动画时长 (毫秒); 默认 300.
+//@别名  置过渡动画时长()
+	void SetAnimDuration(int ms);
+
+//@返回 过渡动画时长 (毫秒).
+//@别名  取过渡动画时长()
+	int GetAnimDuration() const;
+
+//@备注 构建完步骤后调用, 对最外层执行 XEle_AdjustLayout.
+//@别名  调整布局()
+	void AdjustLayout();
+
+	// ===== 步骤 =====
+
+//@备注 追加一步; pText 可为空.
+//@返回 步骤 ID (>0)
+//@别名  添加步骤()
+	int AddStep(const wchar_t* pText = NULL);
+
+//@备注 在 index 处插入一步 (0-based).
+//@返回 步骤 ID (>0), 失败返回 0
+//@别名  插入步骤()
+	int InsertStep(int index, const wchar_t* pText = NULL);
+
+//@备注 设置步骤说明文本.
+//@别名  置步骤文本()
+	BOOL SetStepText(int stepId, const wchar_t* pText);
+
+//@备注 删除单步.
+//@别名  删除步骤()
+	BOOL RemoveStep(int stepId);
+
+//@备注 清空全部步骤.
+//@别名  清空步骤()
+	void ClearSteps();
+
+//@返回 步骤数量.
+//@别名  取步骤数量()
+	int GetStepCount() const;
+
+	// ===== 进度 =====
+
+//@备注 设置当前步骤索引 (0-based); index 之前为 finish, 等于 index 为 process, 之后为 wait; 连接段随 visualStep 过渡.
+//@别名  置当前步骤()
+	BOOL SetCurrentStep(int index);
+
+//@返回 当前步骤索引 (0-based).
+//@别名  取当前步骤()
+	int GetCurrentStep() const;
+
+//@备注 覆盖单步圆点/文本视觉; 连接段仍由 currentStep/visualStep 推导. 恢复自动推导请 SetStepStatus(id, -1).
+//@别名  置步骤状态()
+	BOOL SetStepStatus(int stepId, int status);
+
+//@返回 单步有效状态 (推导或覆盖后).
+//@别名  取步骤状态()
+	xsteps_status_ GetStepStatus(int stepId) const;
+
+	// ===== 标签图标 =====
+
+//@备注 该步标签始终显示图片 (优先于数字).
+//@别名  置步骤标签图标()
+	BOOL SetStepLabelIcon(int stepId, HIMAGE hImg);
+
+//@备注 该步标签始终显示 SVG (优先于数字).
+//@别名  置步骤标签SVG()
+	BOOL SetStepLabelSvg(int stepId, HSVG hSvg);
+
+//@备注 清除该步自定义标签图标.
+//@别名  清空步骤标签图标()
+	BOOL ClearStepLabelIcon(int stepId);
+
+//@备注 已完成步骤显示完成图标 (需 SetShowCompletedIcon(TRUE)).
+//@别名  置完成图标()
+	void SetCompletedIcon(HIMAGE hImg);
+
+//@备注 已完成步骤显示完成 SVG.
+//@别名  置完成SVG()
+	void SetCompletedIconSvg(HSVG hSvg);
+
+//@备注 是否对已完成步骤显示完成图标; 未设资源时暂用文本 L"√".
+//@别名  显示完成图标()
+	void SetShowCompletedIcon(BOOL bShow);
+
+//@返回 是否显示完成图标.
+//@别名  是否显示完成图标()
+	BOOL IsShowCompletedIcon() const;
+
+	// ===== 查询 =====
+
+//@返回 步骤标签元素 hStepLabel.
+//@别名  取步骤标签元素()
+	HELE GetStepLabelEle(int stepId) const;
+
+//@返回 步骤文本 ShapeText.
+//@别名  取步骤文本元素()
+	HXCGUI GetStepTextEle(int stepId) const;
+
+//@返回 步骤项外壳 hStepItem.
+//@别名  取步骤项宿主()
+	HELE GetStepItemWrap(int stepId) const;
+
+	// ===== 事件 =====
+
+//@备注 点击标签或文本时回调; 默认不切换当前步.
+//@别名  置步骤点击事件()
+	void SetOnStepClick(xsteps_step_event fn);
+
+//@别名  置主题变更事件()
+	void SetOnThemeChanged(xsteps_void_event fn);
+
+	//@隐藏{
+	void ReleaseFonts();
+	void DetachFonts();
+	void EnsureFonts();
+	void _xsteps_DetachFontRefsFromUi();
+	void _xsteps_ReleaseOwnedResources();
+	void _xsteps_ClearState();
+	void _xsteps_OnRootDestroyed();
+	void InstallEvents();
+	_XSteps_StepState* FindStep(int stepId);
+	int _xsteps_IndexOfStep(int stepId) const;
+	xsteps_status_ _xsteps_ResolveStatus(const _XSteps_StepState* step, int index) const;
+	float _xsteps_GetVisualStep() const;
+	void _xsteps_StartAnimTimer();
+	void _xsteps_StopAnimTimer();
+	void _xsteps_SyncVisualProgress();
+	void _xsteps_UpdateAllStepVisuals();
+	void _xsteps_TickStepAnim();
+	void _xsteps_ApplyRootLayout();
+	void _xsteps_ApplyWrapLayout();
+	void _xsteps_RecalcVerticalTextColWidth();
+	void _xsteps_ApplyStepItemLayout(_XSteps_StepState* step);
+	void _xsteps_ApplyAllStepLayouts();
+	void _xsteps_ApplyStepTextAlign(_XSteps_StepState* step);
+	void _xsteps_ReorderStepItemChildren(_XSteps_StepState* step);
+	void _xsteps_ApplyAllContentOrder();
+	BOOL _xsteps_CreateStepElements(_XSteps_StepState* step);
+	void UpdateStepVisual(_XSteps_StepState* step);
+	void RefreshTheme();
+	void _xsteps_InvalidConnectors();
+	void _xsteps_PaintLabelConnectors(HDRAW hDraw, const RECT& rcClient, int index) const;
+	void _xsteps_PaintLabelContent(HDRAW hDraw, _XSteps_StepState* step, int index,
+		const RECT& rcCircle, xsteps_status_ status);
+
+	int OnStepLabelPaintImpl(HELE hEle, HDRAW hDraw, BOOL* pbHandled);
+	int OnStepClickImpl(HELE hEle, BOOL* pbHandled);
+	int OnDestroyImpl(HELE hEle, BOOL* pbHandled);
+	int OnDestroyEndImpl(HELE hEle, BOOL* pbHandled);
+	int OnShowImpl(HELE hEle, BOOL bShow, BOOL* pbHandled);
+	int OnSizeImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+	int OnAdjustLayoutEndImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandled);
+	int OnAnimTimerImpl(HELE hEle, UINT nID, BOOL* pbHandled);
+
+	xuitool_theme_ m_theme;
+	COLORREF m_customText;
+	COLORREF m_customBg;
+	COLORREF m_customAccent;
+	xsteps_orientation_ m_orientation;
+	xsteps_content_order_ m_contentOrder;
+	int m_currentStep;
+	float m_visualStep;
+	BOOL m_bAnimEnabled;
+	int m_animDurationMs;
+	BOOL m_stepAnimActive;
+	float m_animFrom;
+	float m_animTo;
+	DWORD m_animStartMs;
+	BOOL m_bShowCompletedIcon;
+	int m_nextStepId;
+	HFONTX m_hFontText;
+	HFONTX m_hFontLabel;
+	HIMAGE m_hCompletedIcon;
+	HSVG m_hCompletedSvg;
+	_XSteps_ThemeColors* m_pColors;
+	xsteps_step_event m_onStepClick;
+	xsteps_void_event m_onThemeChanged;
+	BOOL m_bRootDestroyed;
+	BOOL m_inAdjustLayoutEndImpl;
+	BOOL m_inLayoutSync;
+	HELE m_hStepWrap;
+	int m_vertTextColW;
+	std::vector<int> m_stepOrder;
+	std::unordered_map<int, _XSteps_StepState*> m_steps;
 	//@隐藏}
 };
 //@分组}

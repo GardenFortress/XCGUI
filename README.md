@@ -7,7 +7,7 @@
 | 模块 | 类 | 用途 |
 |---|---|---|
 | [`module_xcgui_media`](./module_xcgui_media/) | `CXImageEx` / `CXVideo` | 图片 + 视频播放，共享 FFmpeg / 渲染内核 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` / `CXCardPanel` / `CXSteps` / `CXColorPicker` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板、卡片面板、步骤条、颜色选择器 |
 
 旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
@@ -127,6 +127,45 @@ pAcc->ExpandItem(item, TRUE);
 ```
 
 完整 API 与事件示例见 [`module_xcgui_uitool/示例/demo_accordion.cpp`](./module_xcgui_uitool/示例/demo_accordion.cpp)。
+
+### CXCardPanel
+
+设置页风格卡片面板，支持分组标题、圆角卡片、开关行与内容区布局。
+
+```cpp
+CXCardPanel* pPanel = new CXCardPanel();
+pPanel->Create(hWnd);
+pPanel->SetTheme(xuitool_theme_auto);
+int g = pPanel->AddGroup(L"通用");
+pPanel->AddGroupContentEle(g, hToggleRow);
+pPanel->AdjustLayout();
+// 关闭前: pPanel->DestroyCardPanel(); delete pPanel;
+```
+
+### CXSteps
+
+水平/垂直步骤条，支持深浅主题、标签顺序调换与切换动画。
+
+```cpp
+CXSteps* pSteps = new CXSteps();
+pSteps->Create(hWnd);
+pSteps->SetTheme(xuitool_theme_dark);
+pSteps->SetOrientation(xsteps_orient_horizontal);
+pSteps->AddStep(L"Register");
+pSteps->AddStep(L"Choose plan");
+pSteps->SetCurrentStep(1);
+pSteps->AdjustLayout();
+```
+
+### CXColorPicker
+
+现代颜色选择器，支持 RGBA/HEX/HSL、吸管取色、实时预览与元素绑定。
+
+```cpp
+xcolor_rgba_ color = { 255, 0, 0, 255 };
+CXColorPicker::SetBindEle(hBtn, 0, 4);
+CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto);
+```
 
 ## 兼容性
 

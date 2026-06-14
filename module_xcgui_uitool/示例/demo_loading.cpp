@@ -1,4 +1,4 @@
-// CXLoading 完整接口使用示例.
+﻿// CXLoading 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXLoading 全部静态 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp

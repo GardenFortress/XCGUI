@@ -143,6 +143,7 @@ HELE CXVideo::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 	//   3. layout.alignV=bottom 让单一子节点 (控件栏) 自动贴底部.
 	m_hEle = XLayout_Create(x, y, cx, cy, hParent);
 	if (!m_hEle) return NULL;
+	XUI_EnableCSS(m_hEle, FALSE);
 	// CXLayout 默认 EnableMouseThrough=TRUE (鼠标穿透到下层), 我们要让视频区接 LBUTTONUP
 	// 触发 暂停/恢复, 必须关闭.
 	XEle_EnableMouseThrough(m_hEle, FALSE);
@@ -670,6 +671,7 @@ void CXVideo::CloseInternal(){
 	m_swsLastSrcW = m_swsLastSrcH = m_swsLastDstW = m_swsLastDstH = 0;
 	m_swsLastSrcFmt = AV_PIX_FMT_NONE;
 	m_swsLastFlags  = 0;
+	m_vDecodeDiscardBeforeSec.store(-1.0, std::memory_order_release);
 	if (m_pSwr){
 		swr_free(&m_pSwr);   // swr_free 接受 SwrContext** 并置 NULL
 	}
@@ -763,10 +765,8 @@ void CXVideo::DemuxThreadFn(){
 			if (m_durationSec > 0 && tgt > m_durationSec) tgt = m_durationSec;
 
 			// av_seek_frame: AVSEEK_FLAG_BACKWARD 找最近的关键帧 (向前). FFmpeg 不保证
-			// 跳到精确 PTS, 解码会从最近 keyframe 开始, 中间帧解出来后丢掉直到 >= tgt.
-			// 简化处理: 我们不做 keyframe-to-target 之间的精确丢弃, 用户感知是首帧
-			// 可能比 tgt 早几十毫秒到几秒不等 (取决于 GOP 大小). 工业级播放器会做
-			// 二级精确 seek, 这里先满足通用需求.
+			// 跳到精确 PTS; decode 线程在 flush 后按 m_vDecodeDiscardBeforeSec 丢弃
+			// PTS < target 的帧 (对齐 VLC discard), 减轻 scrub/seek 画面回弹.
 			int64_t targetPts = (int64_t)((tgt + m_startTimeSec) * AV_TIME_BASE);
 			int ret = av_seek_frame(m_pFmt, -1, targetPts, AVSEEK_FLAG_BACKWARD);
 			if (ret < 0){
@@ -1023,6 +1023,11 @@ void CXVideo::VideoDecodeThreadFn(){
 			avcodec_flush_buffers(m_pVCtx);
 			// seek flush 时清掉自己手上 frame ref 残余.
 			av_frame_unref(frame);
+			if (!node.eof){
+				m_vDecodeDiscardBeforeSec.store(
+					m_seekTargetSec.load(std::memory_order_acquire),
+					std::memory_order_release);
+			}
 			if (node.eof){
 				// drain decoder
 				avcodec_send_packet(m_pVCtx, NULL);
@@ -1113,6 +1118,16 @@ void CXVideo::VideoDecodeThreadFn(){
 			if (pts == AV_NOPTS_VALUE) pts = useFrame->pts;
 			double sec = VPtsToSec(pts);
 			if (sec < 0) sec = 0;
+
+			double discardBefore = m_vDecodeDiscardBeforeSec.load(std::memory_order_acquire);
+			if (discardBefore >= 0.0 && sec + 0.001 < discardBefore){
+				av_frame_unref(frame);
+				if (useFrame == swFrame) av_frame_unref(swFrame);
+				continue;
+			}
+			if (discardBefore >= 0.0 && sec + 0.001 >= discardBefore){
+				m_vDecodeDiscardBeforeSec.store(-1.0, std::memory_order_release);
+			}
 
 			// (d) 推帧队列. 帧大小可能很大 (1080p ≈ 8MB), 队列容量上限保护内存.
 			_XVideo_VideoFrameNode out;
@@ -1766,8 +1781,10 @@ int CXVideo::OnTimerImpl(HELE /*hEle*/, UINT timerId, BOOL* /*pbHandled*/){
 	// 1) worker 线程产生的事件 -> UI 线程派发.
 	DispatchPendingCallbacks();
 
-	// 2) 视频帧调度.
-	TryAdvanceFrame();
+	// 2) 视频帧调度. 宿主不可见时跳过 (音频 worker 仍推进; 避免最小化时无意义 redraw).
+	if (_XMedia_IsHostVisible((void*)m_hEle)){
+		TryAdvanceFrame();
+	}
 
 	// 3) Scrub pending commit: 用户快速拖动节流期间 Seek 被攒到 m_pendingScrubSec,
 	//    每个 tick (16ms) 检查一次, 距上次实际 Seek 超过 kScrubMinIntervalMs 就 commit.
@@ -2327,6 +2344,7 @@ void CXVideo::CreateControlBar(){
 	// XCGUI 在重绘时会同时走 选中 / 未选中 两套背景, 能直接表达 "正在播放" 的状态;
 	// 事件走 XE_BUTTON_CHECK 拿到新的 bCheck, 不需再去 load m_state 翻译.
 	m_hBtnPlay = XBtn_Create(0, 0, kBtnW, kBtnH, L"▶", (HXCGUI)m_hCtrlBar);
+	XUI_EnableCSS(m_hBtnPlay, FALSE);
 	XBtn_SetTypeEx(m_hBtnPlay, button_type_check);
 	styleButton(m_hBtnPlay, L"播放/暂停");
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnPlay, layout_size_fixed, kBtnW);
@@ -2337,6 +2355,7 @@ void CXVideo::CreateControlBar(){
 
 	// Loop (40x40 固定). 同上用 button_type_check, check==SetLoop 完全一一对应.
 	m_hBtnLoop = XBtn_Create(0, 0, kBtnW, kBtnH, L"↻", (HXCGUI)m_hCtrlBar);
+	XUI_EnableCSS(m_hBtnLoop, FALSE);
 	XBtn_SetTypeEx(m_hBtnLoop, button_type_check);
 	styleButton(m_hBtnLoop, L"循环播放");
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnLoop, layout_size_fixed, kBtnW);
@@ -2375,6 +2394,7 @@ void CXVideo::CreateControlBar(){
 	// Time 标签 (CXShapeText, auto-size 跟文字宽). shape 没 EnableBkTransparent -
 	// 它本身就是绘图形状, 不带背景.
 	m_hLblTime = XShapeText_Create(0, 0, 100, kBtnH, L"0:00 / 0:00", (HXCGUI)m_hCtrlBar);
+	XUI_EnableCSS(m_hLblTime, FALSE);
 	if (m_hLblTime){
 		XShapeText_SetTextColor(m_hLblTime, m_ctrlBarFg);
 		XWidget_LayoutItem_SetWidth (m_hLblTime, layout_size_auto, 0);
@@ -2383,6 +2403,7 @@ void CXVideo::CreateControlBar(){
 
 	// Volume (40x40 固定)
 	m_hBtnVolume = XBtn_Create(0, 0, kBtnW, kBtnH, L"🔊", (HXCGUI)m_hCtrlBar);
+	XUI_EnableCSS(m_hBtnVolume, FALSE);
 	styleButton(m_hBtnVolume, L"音量");
 	XWidget_LayoutItem_SetWidth ((HXCGUI)m_hBtnVolume, layout_size_fixed, kBtnW);
 	XWidget_LayoutItem_SetHeight((HXCGUI)m_hBtnVolume, layout_size_fixed, kBtnH);
@@ -3003,11 +3024,14 @@ BOOL CXVideo::GetVideoCover(const wchar_t* pVideoPath, const wchar_t* pSaveDir,
 		return TRUE;
 	}
 
-	// 4) FFmpeg 抓帧 (L0 共享 open + grab).
+	// 4) FFmpeg 抓帧 (L0 共享 open + grab). 静态 API 无用户 abort, 用 30s 超时防网络挂死.
 	AVFormatContext* pFmt = avformat_alloc_context();
 	if (!pFmt) return FALSE;
+	_XMedia_FF_InterruptCtx intrCtx;
+	intrCtx.pUserAbort  = NULL;
+	intrCtx.deadlineMs  = ::GetTickCount64() + 30000ULL;
 	std::string utf8 = _XMedia_FF_WideToUtf8(pVideoPath);
-	if (_XMedia_FF_OpenWithOptions(&pFmt, utf8.c_str(), _xmedia_open_thumbnail, NULL) < 0) return FALSE;
+	if (_XMedia_FF_OpenWithOptions(&pFmt, utf8.c_str(), _xmedia_open_thumbnail, NULL, &intrCtx) < 0) return FALSE;
 	BOOL ok = FALSE;
 	do{
 		if (avformat_find_stream_info(pFmt, NULL) < 0) break;
@@ -3039,8 +3063,11 @@ BOOL CXVideo::GetVideoInfo(const wchar_t* pVideoPath, XVideoInfo* pOutInfo, doub
 
 	AVFormatContext* pFmt = avformat_alloc_context();
 	if (!pFmt) return FALSE;
+	_XMedia_FF_InterruptCtx intrCtx;
+	intrCtx.pUserAbort  = NULL;
+	intrCtx.deadlineMs  = ::GetTickCount64() + 30000ULL;
 	std::string utf8 = _XMedia_FF_WideToUtf8(pVideoPath);
-	if (_XMedia_FF_OpenWithOptions(&pFmt, utf8.c_str(), _xmedia_open_thumbnail, NULL) < 0) return FALSE;
+	if (_XMedia_FF_OpenWithOptions(&pFmt, utf8.c_str(), _xmedia_open_thumbnail, NULL, &intrCtx) < 0) return FALSE;
 	BOOL ok = FALSE;
 	do{
 		if (avformat_find_stream_info(pFmt, NULL) < 0) break;

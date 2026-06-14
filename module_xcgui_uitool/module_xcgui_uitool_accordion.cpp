@@ -1,4 +1,4 @@
-//============================================================================
+﻿//============================================================================
 // module_xcgui_uitool_accordion.cpp — CXAccordion split
 // 仅由 module_xcgui_uitool.cpp #include; 勿单独编译.
 //============================================================================
@@ -143,6 +143,11 @@ void _xacc_UnregWndOwner(HWINDOW hWnd, CXAccordion* acc)
 inline BOOL _XAcc_IsMultiExpandMode(xaccordion_expand_mode_ mode)
 {
 	return mode == xaccordion_expand_mode_multiple;
+}
+
+inline BOOL _XAcc_IsItemOpen(const _XAcc_ItemState* item)
+{
+	return item && (item->expanded || (item->anim.active && item->anim.expanding));
 }
 
 inline unsigned _XAcc_Rgb(COLORREF c) { return (unsigned)(c | 0xFF000000u); }
@@ -321,6 +326,7 @@ void _XAcc_PrepareCardEle(HELE hEle)
 void _XAcc_PrepareItemBtn(HELE hBtn)
 {
 	if (!hBtn || !XC_IsHELE((HXCGUI)hBtn)) return;
+	XUI_EnableCSS(hBtn, FALSE);
 	XEle_EnableDrawBorder(hBtn, FALSE);
 	XEle_EnableDrawFocus(hBtn, FALSE);
 }
@@ -483,6 +489,7 @@ void CALLBACK CXAccordion::AnimaItemProgressCb(HXCGUI hAnimaItem, float pos)
 	if (it == s_xaccAnimItemOwners.end() || !it->second) return;
 	CXAccordion* acc = it->second;
 	if (acc->m_bRootDestroyed || !acc->m_hEle) return;
+	if (acc->m_inSizeImpl || acc->m_inLayoutSync) return;
 	if (acc->m_hEle) XEle_AdjustLayoutEx(acc->m_hEle, adjustLayout_all);
 }
 
@@ -518,6 +525,7 @@ CXAccordion::CXAccordion()
 	, m_bRootDestroyed(FALSE)
 	, m_inAdjustLayoutEndImpl(FALSE)
 	, m_inLayoutSync(FALSE)
+	, m_inSizeImpl(FALSE)
 	, m_hOwnerWnd(NULL)
 	, m_hSvgIndCollapsed(NULL)
 	, m_hSvgIndExpanded(NULL)
@@ -776,6 +784,7 @@ HELE CXAccordion::Create(HXCGUI hParent)
 		m_hEle = NULL;
 		return NULL;
 	}
+	XUI_EnableCSS(m_hEle, FALSE);
 
 	EnsureFonts();
 	_xacc_LoadSvgAssets();
@@ -813,7 +822,7 @@ void CXAccordion::AdjustLayout()
 	if (m_inLayoutSync || !m_hEle) return;
 	m_inLayoutSync = TRUE;
 	for (auto& kv : m_items){
-		if (kv.second) _xacc_NormalizeItemLayout(kv.second);
+		if (kv.second) _xacc_NormalizeItemLayout(kv.second, TRUE);
 	}
 	for (auto& gkv : m_groups){
 		_XAcc_GroupState* g = gkv.second;
@@ -825,16 +834,35 @@ void CXAccordion::AdjustLayout()
 	m_inLayoutSync = FALSE;
 }
 
-void CXAccordion::_xacc_NormalizeItemLayout(_XAcc_ItemState* item)
+void CXAccordion::_xacc_OnSizeSync()
+{
+	if (m_inLayoutSync || !m_hEle) return;
+	m_inLayoutSync = TRUE;
+	for (auto& kv : m_items){
+		if (kv.second) _xacc_NormalizeItemLayout(kv.second, FALSE);
+	}
+	XEle_AdjustLayoutEx(m_hEle, adjustLayout_all);
+	_xacc_UpdateScrollTotalSize();
+	m_inLayoutSync = FALSE;
+}
+
+void CXAccordion::_xacc_NormalizeItemLayout(_XAcc_ItemState* item, BOOL measureCollapsed)
 {
 	if (!item) return;
+	// resize 期间若正在展开动画, 旧 targetH 基于旧宽度; 直接切到展开态由 auto 布局换行.
+	if (!measureCollapsed && item->anim.active && item->anim.expanding){
+		StopItemAnima(item);
+		item->expanded = TRUE;
+		_xacc_ApplyExpandedLayout(item);
+		return;
+	}
 	if (item->expanded || item->anim.active){
 		if (!item->anim.active || item->anim.expanding)
 			_xacc_ApplyExpandedLayout(item);
 		return;
 	}
 	// 与 ExpandItem 相同: 先测量内容自然高度, 再收回折叠态, 避免 auto 子项撑乱布局.
-	if (item->contentType != xaccordion_content_none)
+	if (measureCollapsed && item->contentType != xaccordion_content_none)
 		(void)MeasureItemContentHeight(item);
 	_xacc_ApplyCollapsedLayout(item);
 }
@@ -1124,6 +1152,7 @@ int CXAccordion::AddGroup(const wchar_t* pTitle)
 		HXCGUI hTitle = XShapeText_Create(0, 0, 100, 28, g->title.getPtr(), g->hGroupWrap);
 		g->hTitle = hTitle;
 		if (g->hTitle){
+			XUI_EnableCSS(g->hTitle, FALSE);
 			XShapeText_SetTextColor(hTitle, m_pColors->groupTitle);
 			XShapeText_SetFont(hTitle, m_hFontGroup);
 			_xacc_ApplyGroupTitleAlign(g);
@@ -1439,6 +1468,7 @@ BOOL CXAccordion::SetItemBodyText(int itemId, const wchar_t* pText)
 	HXCGUI hText = XShapeText_Create(0, 0, 100, 40, item->bodyText.getPtr(), item->hAnimWrap);
 	item->hContentText = hText;
 	if (!item->hContentText) return FALSE;
+	XUI_EnableCSS(item->hContentText, FALSE);
 	XShapeText_SetFont(hText, m_hFontBody);
 	XShapeText_SetTextColor(hText, m_pColors->body);
 	XShapeText_SetTextAlign(hText, textAlignFlag_left | textAlignFlag_top);
@@ -1469,7 +1499,20 @@ BOOL CXAccordion::ClearItemContent(int itemId)
 {
 	_XAcc_ItemState* item = FindItem(itemId);
 	if (!item) return FALSE;
-	return ClearItemContentEle(item);
+	const BOOL wasOpen = _XAcc_IsItemOpen(item);
+	if (!ClearItemContentEle(item)) return FALSE;
+	if (wasOpen){
+		StopItemAnima(item);
+		item->expanded = FALSE;
+		_xacc_ApplyCollapsedLayout(item);
+		SyncItemBtnCheck(item);
+		UpdateItemShell(item);
+		if (m_hEle){
+			XEle_AdjustLayoutEx(m_hEle, adjustLayout_all);
+			_xacc_UpdateScrollTotalSize();
+		}
+	}
+	return TRUE;
 }
 
 BOOL CXAccordion::SetItemContentMinHeight(int itemId, int h)
@@ -1850,7 +1893,7 @@ BOOL CXAccordion::ToggleItem(int itemId, BOOL bAnimate)
 BOOL CXAccordion::IsItemExpanded(int itemId) const
 {
 	_XAcc_ItemState* item = const_cast<CXAccordion*>(this)->FindItem(itemId);
-	return item ? item->expanded : FALSE;
+	return _XAcc_IsItemOpen(item);
 }
 
 BOOL CXAccordion::CollapseAll(int groupId)
@@ -1872,7 +1915,7 @@ int CXAccordion::GetExpandedItem(int groupId) const
 {
 	for (auto& kv : m_items){
 		_XAcc_ItemState* item = kv.second;
-		if (!item || item->groupId != groupId || !item->expanded) continue;
+		if (!item || item->groupId != groupId || !_XAcc_IsItemOpen(item)) continue;
 		return item->id;
 	}
 	return -1;
@@ -2098,8 +2141,10 @@ int CXAccordion::OnSizeImpl(HELE hEle, int nFlags, UINT nAdjustNo, BOOL* pbHandl
 	(void)nFlags;
 	(void)nAdjustNo;
 	(void)pbHandled;
-	if (hEle != m_hEle || m_bRootDestroyed) return 0;
-	AdjustLayout();
+	if (hEle != m_hEle || m_bRootDestroyed || m_inSizeImpl) return 0;
+	m_inSizeImpl = TRUE;
+	_xacc_OnSizeSync();
+	m_inSizeImpl = FALSE;
 	return 0;
 }
 

@@ -99,6 +99,21 @@ int _XMedia_FF_InterruptCallback(void* opaque){
 	return 0;
 }
 
+int _XMedia_FF_InterruptCallbackEx(void* opaque){
+	_XMedia_FF_InterruptCtx* pCtx = (_XMedia_FF_InterruptCtx*)opaque;
+	if (!pCtx) return 0;
+	if (pCtx->pUserAbort && pCtx->pUserAbort->load(std::memory_order_acquire)){
+		return 1;
+	}
+	if (pCtx->deadlineMs != 0){
+		unsigned long long now = ::GetTickCount64();
+		if (now >= pCtx->deadlineMs){
+			return 1;
+		}
+	}
+	return 0;
+}
+
 std::string _XMedia_FF_WideToUtf8(const std::wstring& w){
 	if (w.empty()) return std::string();
 	// UI / worker: 短路径走 XC_wtoutf8 共享缓冲, 立即 copy 到 std::string (XC_* 非线程安全).
@@ -128,12 +143,20 @@ std::wstring _XMedia_FF_ErrToWide(int err){
 
 int _XMedia_FF_OpenWithOptions(AVFormatContext** ppFmt, const char* url,
                                 _XMedia_OpenProfile_ profile,
-                                std::atomic<bool>* pAbort){
+                                std::atomic<bool>* pAbort,
+                                _XMedia_FF_InterruptCtx* pIntrCtx){
 	if (!ppFmt || !*ppFmt || !url) return AVERROR(EINVAL);
-	if (pAbort){
-		(*ppFmt)->interrupt_callback.callback = &_XMedia_FF_InterruptCallback;
-		(*ppFmt)->interrupt_callback.opaque   = (void*)pAbort;
-	}
+	auto bindIntr = [&](AVFormatContext* pCtx){
+		if (!pCtx) return;
+		if (pAbort){
+			pCtx->interrupt_callback.callback = &_XMedia_FF_InterruptCallback;
+			pCtx->interrupt_callback.opaque   = (void*)pAbort;
+		} else if (pIntrCtx){
+			pCtx->interrupt_callback.callback = &_XMedia_FF_InterruptCallbackEx;
+			pCtx->interrupt_callback.opaque   = (void*)pIntrCtx;
+		}
+	};
+	bindIntr(*ppFmt);
 	AVDictionary* opts = NULL;
 	const char* probesize = "5M";
 	const char* analyzeduration = "3M";
@@ -168,10 +191,7 @@ int _XMedia_FF_OpenWithOptions(AVFormatContext** ppFmt, const char* url,
 	avformat_free_context(*ppFmt);
 	*ppFmt = avformat_alloc_context();
 	if (!*ppFmt) return AVERROR(ENOMEM);
-	if (pAbort){
-		(*ppFmt)->interrupt_callback.callback = &_XMedia_FF_InterruptCallback;
-		(*ppFmt)->interrupt_callback.opaque   = (void*)pAbort;
-	}
+	bindIntr(*ppFmt);
 	return avformat_open_input(ppFmt, url, NULL, NULL);
 }
 

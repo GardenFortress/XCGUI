@@ -1,4 +1,4 @@
-#ifndef  XCGUI_CHAT_H
+﻿#ifndef  XCGUI_CHAT_H
 #define  XCGUI_CHAT_H
 //@模块名称  炫彩界面库-聊天气泡框
 //@版本  1.0.0

@@ -142,6 +142,19 @@ bool _XMedia_SizeMoveGuard_IsActive(void* hEle){
 	return it->second.inSizeMove;
 }
 
+bool _XMedia_IsHostVisible(void* hEle){
+	// 不用 XWidget_IsShow: 元素/窗口销毁过渡期 HWINDOW 可能仍过 XC_IsHWINDOW 但
+	// IsShow 会弹 0x4D3. 改查 Win32 原生 HWND (ResolveHost 已解析).
+	if (!hEle) return true;
+	HELE ele = (HELE)hEle;
+	if (!XC_IsHELE((HXCGUI)ele)) return false;
+	HWND raw = NULL;
+	HWINDOW hxw = NULL;
+	if (!_XMedia_SizeMove_ResolveHost(hEle, &raw, &hxw)) return true;
+	if (!raw || !::IsWindow(raw)) return false;
+	return ::IsWindowVisible(raw) != FALSE && !::IsIconic(raw);
+}
+
 void _XMedia_Render_ComputeDestRect(int fitMode, int srcW, int srcH,
                                      int eleW, int eleH, RECT* pDst){
 	pDst->left = pDst->top = pDst->right = pDst->bottom = 0;

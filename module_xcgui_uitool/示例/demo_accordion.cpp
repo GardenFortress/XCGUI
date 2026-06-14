@@ -1,4 +1,4 @@
-// CXAccordion 完整接口使用示例.
+﻿// CXAccordion 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXAccordion 全部 public 方法 + 事件回调.
 // 演示 FAQ 单组模式、引导清单分组模式、元素内容区、主题/展开/禁用等交互.
 //
@@ -70,6 +70,7 @@ static HELE CreatePaymentPanel()
 		L"Connect your payment provider to start accepting orders.",
 		hRoot);
 	if (hDesc){
+		XUI_EnableCSS(hDesc, FALSE);
 		HFONTX hFont = XFont_CreateEx(L"Segoe UI", 9, fontStyle_regular);
 		if (hFont) XShapeText_SetFont(hDesc, hFont);
 		XShapeText_SetTextColor(hDesc, RGBA(107, 114, 128, 255));
@@ -90,11 +91,13 @@ static HELE CreatePaymentPanel()
 
 		HELE hEdit = XEdit_Create(0, 0, 260, 32, L"you@store.com", hRow);
 		if (hEdit){
+			XUI_EnableCSS(hEdit, FALSE);
 			XWidget_LayoutItem_SetWidth(hEdit, layout_size_weight, 1);
 			XWidget_LayoutItem_SetHeight(hEdit, layout_size_fixed, 32);
 		}
 		HELE hBtn = XBtn_Create(0, 0, 80, 32, L"Connect", hRow);
 		if (hBtn){
+			XUI_EnableCSS(hBtn, FALSE);
 			XWidget_LayoutItem_SetWidth(hBtn, layout_size_auto, 0);
 			XWidget_LayoutItem_SetHeight(hBtn, layout_size_fixed, 32);
 		}
@@ -115,6 +118,7 @@ static HELE CreateDownloadPanel()
 
 	HXCGUI hTitle = XShapeText_Create(0, 0, 400, 24, L"皮肤 sdk_ec 版", hRoot);
 	if (hTitle){
+		XUI_EnableCSS(hTitle, FALSE);
 		HFONTX hFont = XFont_CreateEx(L"Segoe UI", 12, fontStyle_bold);
 		if (hFont) XShapeText_SetFont(hTitle, hFont);
 		XShapeText_SetTextColor(hTitle, RGBA(23, 23, 23, 255));
@@ -125,6 +129,7 @@ static HELE CreateDownloadPanel()
 
 	HXCGUI hVer = XShapeText_Create(0, 0, 400, 18, L"版本号: 2.1.0 (2025-5-22)", hRoot);
 	if (hVer){
+		XUI_EnableCSS(hVer, FALSE);
 		HFONTX hFont = XFont_CreateEx(L"Segoe UI", 9, fontStyle_regular);
 		if (hFont) XShapeText_SetFont(hVer, hFont);
 		XShapeText_SetTextColor(hVer, RGBA(107, 114, 128, 255));

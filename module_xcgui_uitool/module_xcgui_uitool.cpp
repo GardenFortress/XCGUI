@@ -2,9 +2,10 @@
 #define _XCGUI_UITOOL_AGGREGATED_
 //
 // 顶层类 split:
-//   CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur / CXAccordion (+ dcomp)
+//   CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker (+ dcomp)
 // 共有:
-//   module_xcgui_uitool_common.inc      — _XUITool 主题层
+//   module_xcgui_uitool_common.inc      — 系统环境 + _XUITool 主题层
+//   module_xcgui_uitool_steps_const.inc — CXSteps 布局/动画常量
 //   module_xcgui_draw_softshadow.inc  — 软阴影描边内核
 //   module_xcgui_uitool_svgs.inc        — 月历导航 + tooltip 图标 SVG
 
@@ -30,10 +31,13 @@
 #include "module_xcgui_uitool_tooltip.cpp"
 #include "module_xcgui_uitool_loading.cpp"
 #include "module_xcgui_uitool_calendar.cpp"
+#include "module_xcgui_uitool_colorpicker.cpp"
 #include "module_xcgui_uitool_shadow.inc"
 #include "module_xcgui_uitool_editdw.cpp"
 #include "module_xcgui_uitool_chat.cpp"
 #include "module_xcgui_uitool_accordion.cpp"
+#include "module_xcgui_uitool_cardpanel.cpp"
+#include "module_xcgui_uitool_steps.cpp"
 #include "module_xcgui_uitool_blur.cpp"
 #include "module_xcgui_uitool_blur_dcomp.cpp"
 

@@ -1,4 +1,4 @@
-// CXEditDW 完整接口使用示例.
+﻿// CXEditDW 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXEditDW 全部 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp
@@ -88,8 +88,13 @@ static void DemoEditTextAndStyle(CXEditDW& edit)
 	edit.ModifyStyle(iBlue, hFont, RGBA(0x00, 0x00, 0xFF, 0xFF), TRUE);
 
 	HELE hBtn = XBtn_Create(0, 0, 48, 24, L"OK", edit);
+	if (hBtn) XUI_EnableCSS(hBtn, FALSE);
 	edit.AddObject(hBtn);
-	edit.InsertObject(0, XBtn_Create(0, 0, 48, 24, L"Go", edit));
+	{
+		HELE hGo = XBtn_Create(0, 0, 48, 24, L"Go", edit);
+		if (hGo) XUI_EnableCSS(hGo, FALSE);
+		edit.InsertObject(0, hGo);
+	}
 	edit.AddByStyle(iRed);
 
 	// edit.DeleteStyle(iBlue);  // 引用计数 > 0 时失败

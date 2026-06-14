@@ -1,4 +1,4 @@
-// CXShadow 完整接口使用示例.
+﻿// CXShadow 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXShadow 全部 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp
@@ -17,31 +17,19 @@ static CXShadow* g_pShadow = NULL;
 static void SetupShadowStyle(CXShadow& shadow)
 {
 	shadow.SetCornerRadius(10);
-	shadow.SetShadowRadius(24);
-	shadow.SetShadowSpread(0);
-	shadow.SetShadowOffset(0, 6);
-	shadow.SetShadowColor(0x1A000000u);
-	shadow.SetInactiveShadowColor(0x0E000000u);
 	shadow.SetBorderColor(0x0F000000u);
 	shadow.SetBorderWidth(1.0f);
-	shadow.SetInsetCorrection(1);
 	shadow.SetTheme(xshadow_theme_auto);
 
-	shadow.SetInnerBgColor(RGB(0xFC, 0xFC, 0xFC));
+	// 内圈填充: 默认随主题 (#202020 / #f3f3f3); 可自定义覆盖
+	shadow.SetInnerBgColor(RGB(0x2A, 0x2A, 0x2A));
 	(void)shadow.GetInnerBgColor();
 	shadow.ClearInnerBgColor();
 	(void)shadow.GetInnerBgColor();
 
 	(void)shadow.GetCornerRadius();
-	(void)shadow.GetShadowRadius();
-	(void)shadow.GetShadowSpread();
-	int dx = 0, dy = 0;
-	shadow.GetShadowOffset(&dx, &dy);
-	(void)shadow.GetShadowColor();
-	(void)shadow.GetInactiveShadowColor();
 	(void)shadow.GetBorderColor();
 	(void)shadow.GetBorderWidth();
-	(void)shadow.GetInsetCorrection();
 	(void)shadow.GetTheme();
 
 	shadow.Invalidate();

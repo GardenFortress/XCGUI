@@ -791,6 +791,7 @@ HELE CXLoading::Create(int x, int y, int cx, int cy, HXCGUI hParent)
 {
 	HELE hEle = XEle_Create(x, y, cx, cy, hParent);
 	if (!hEle) return NULL;
+	XUI_EnableCSS(hEle, FALSE);
 	XEle_EnableBkTransparent(hEle, FALSE);   // 我们要画自己的背景
 	auto* p = _XLoad_GetOrCreate((HXCGUI)hEle);
 	if (!p){
@@ -807,6 +808,7 @@ HELE CXLoading::Create(int x, int y, int cx, int cy, HXCGUI hParent)
 BOOL CXLoading::AttachEle(HELE hEle)
 {
 	if (!XC_IsHELE((HXCGUI)hEle)) return FALSE;
+	XUI_EnableCSS(hEle, FALSE);
 	auto* p = _XLoad_GetOrCreate((HXCGUI)hEle);
 	if (!p) return FALSE;
 	p->ownEle    = FALSE;
@@ -856,6 +858,7 @@ BOOL CXLoading::AttachWnd(HWINDOW hWnd)
 
 	HELE hEle = XEle_Create(x, y, cx, cy, (HXCGUI)hWnd);
 	if (!hEle) return FALSE;
+	XUI_EnableCSS(hEle, FALSE);
 
 	XEle_EnableTopmost(hEle, TRUE);              // 置顶 → 盖住窗口所有同级元素
 	XEle_EnableBkTransparent(hEle, FALSE);       // 我们自画背景

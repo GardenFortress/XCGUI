@@ -54,6 +54,21 @@ static COLORREF _CXShadow_ThemeBorderColor(xuitool_theme_ eff)
     return _XUITool::WithAlpha(_XUITool::kDarkText, 40);
 }
 
+// CXShadow 内圈填充默认 (与 uitool 全局 kDarkBg/kLightBg 独立).
+static COLORREF _CXShadow_DefaultInnerBg(xuitool_theme_ eff)
+{
+    if (eff == xuitool_theme_light)
+        return RGBA(243, 243, 243, 255);   // #f3f3f3
+    return RGBA(32, 32, 32, 255);          // #202020
+}
+
+static void _CXShadow_LiveRepaint(CXShadow* p)
+{
+    if (!p || !p->IsAttached()) return;
+    if (p->IsMaximized()) return;
+    p->Invalidate();
+}
+
 //----------------------------------------------------------------------------
 // 主窗口 HWINDOW → CXShadow* 派发表 (状态在 uitool.cpp 单点定义).
 //----------------------------------------------------------------------------
@@ -141,7 +156,7 @@ BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
     if (m_isMaximized) ClearPadding();   // 最大化起始 → 去 padding
 
     // 6) 主题: 优先 adopt 用户设的全局主题 (CXShadow::SetGlobalTheme), 否则用 m_theme
-    //    默认值 (xshadow_theme_auto). 总之 attach 完后 m_shadowColor 等是 *已应用* 状态.
+    //    默认值 (xshadow_theme_auto). attach 完后 border / 内圈填充 等是 *已应用* 状态.
     int gt = CXShadowModule::GlobalTheme();
     if (gt != xshadow_theme_custom){
         m_theme.store(gt);
@@ -294,6 +309,11 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
         }
     }
 
+    // WM_SIZING: 边缘拖拽改尺寸时每帧触发 (早于 WM_SIZE). 不重绘则 halo/内圈
+    // 滞后一帧直到松手 — 跟手优化入口.
+    if (msg == WM_SIZING && dwRefData){
+        _CXShadow_LiveRepaint(reinterpret_cast<CXShadow*>(dwRefData));
+    }
     if (msg == WM_NCHITTEST){
         CXShadow* p = reinterpret_cast<CXShadow*>(dwRefData);
         if (p){
@@ -462,6 +482,11 @@ int CXShadow::OnWndProcImpl(HWINDOW hWnd, UINT msg,
         if (m_hAttachedWnd) ::XWnd_Redraw(m_hAttachedWnd, FALSE);
         break;
 
+    case WM_SIZING:
+        // XCGUI 可能把 WM_SIZING 派到 XWM_WINDPROC; 与 subclass 双保险.
+        _CXShadow_LiveRepaint(this);
+        break;
+
     case WM_SIZE:
         // WM_SIZE 是处理状态变化 (max/min/restore/snap) + DPI 跟随的统一入口.
         //
@@ -482,6 +507,10 @@ int CXShadow::OnWndProcImpl(HWINDOW hWnd, UINT msg,
             //   - aero snap → ClearPadding
             //   - 普通 restore → ApplyPadding
             SyncWindowState();
+            // 尺寸变化 (含 programmatic SetWindowPos) 需重绘; SyncWindowState 仅在
+            // max/snap 切换时 Redraw, 普通 resize 以前会漏.
+            if (!m_isMaximized && !m_isSnapped)
+                _CXShadow_LiveRepaint(this);
         }
         break;
 
@@ -585,38 +614,6 @@ void CXShadow::SetCornerRadius(int radius){
 }
 int  CXShadow::GetCornerRadius() const { return m_cornerRadius.load(); }
 
-void CXShadow::SetShadowRadius(int radius){
-    if (radius < 0) radius = 0;
-    if (m_shadowRadius.exchange(radius) != radius){ Invalidate(); }
-}
-int  CXShadow::GetShadowRadius() const { return m_shadowRadius.load(); }
-
-void CXShadow::SetShadowSpread(int spread){
-    if (spread < 0) spread = 0;
-    if (m_shadowSpread.exchange(spread) != spread){ Invalidate(); }
-}
-int  CXShadow::GetShadowSpread() const { return m_shadowSpread.load(); }
-
-void CXShadow::SetShadowOffset(int dx, int dy){
-    int oldDx = m_shadowDx.exchange(dx);
-    int oldDy = m_shadowDy.exchange(dy);
-    if (oldDx != dx || oldDy != dy){ Invalidate(); }
-}
-void CXShadow::GetShadowOffset(int* pdx, int* pdy) const {
-    if (pdx) *pdx = m_shadowDx.load();
-    if (pdy) *pdy = m_shadowDy.load();
-}
-
-void CXShadow::SetShadowColor(COLORREF color){
-    if (m_shadowColor.exchange(color) != color){ Invalidate(); }
-}
-COLORREF CXShadow::GetShadowColor() const { return m_shadowColor.load(); }
-
-void CXShadow::SetInactiveShadowColor(COLORREF color){
-    if (m_inactiveShadow.exchange(color) != color){ Invalidate(); }
-}
-COLORREF CXShadow::GetInactiveShadowColor() const { return m_inactiveShadow.load(); }
-
 void CXShadow::SetBorderColor(COLORREF color){
     if (m_borderColor.exchange(color) != color){ Invalidate(); }
 }
@@ -628,12 +625,6 @@ void CXShadow::SetBorderWidth(float w){
     if (old != w) Invalidate();
 }
 float CXShadow::GetBorderWidth() const { return m_borderWidth.load(); }
-
-void CXShadow::SetInsetCorrection(int px){
-    if (px < 0) px = 0;
-    if (m_inset.exchange(px) != px){ Invalidate(); }
-}
-int CXShadow::GetInsetCorrection() const { return m_inset.load(); }
 
 //============================================================================
 // 主题 (含 SetGlobalTheme / WM_SETTINGCHANGE 同步)
@@ -683,16 +674,14 @@ int CXShadow::GetGlobalTheme(){
 void CXShadow::ApplyThemePreset(int theme){
     xuitool_theme_ uit = _CXShadow_ToUitoolTheme(theme);
     xuitool_theme_ eff = _XUITool::EffectiveTheme(uit);
-    _XUITool::ThemePalette pal{};
-    _XUITool::ResolvePalette(uit, 0, 0, 0, &pal);
     m_borderColor.store(_CXShadow_ThemeBorderColor(eff));
     if (!m_innerBgUserSet.load()){
-        m_innerBgColor.store(pal.bg);
+        m_innerBgColor.store(_CXShadow_DefaultInnerBg(eff));
     }
 }
 
 //============================================================================
-// 内圈背景
+// 内圈填充
 //============================================================================
 void CXShadow::SetInnerBgColor(COLORREF color){
     m_innerBgUserSet.store(true);
@@ -704,9 +693,9 @@ void CXShadow::ClearInnerBgColor(){
         return;   // 没自定义过, no-op
     }
     xuitool_theme_ uit = _CXShadow_ToUitoolTheme(m_theme.load());
-    _XUITool::ThemePalette pal{};
-    _XUITool::ResolvePalette(uit, 0, 0, 0, &pal);
-    if (m_innerBgColor.exchange(pal.bg) != pal.bg) Invalidate();
+    xuitool_theme_ eff = _XUITool::EffectiveTheme(uit);
+    COLORREF def = _CXShadow_DefaultInnerBg(eff);
+    if (m_innerBgColor.exchange(def) != def) Invalidate();
 }
 
 COLORREF CXShadow::GetInnerBgColor() const { return m_innerBgColor.load(); }
@@ -999,9 +988,12 @@ void CXShadow::SyncWindowState(){
     if (m_inSizeMove){
         if (wasHide && !nowHide){
             ApplyPadding();    // snap/max → 普通: 立即恢复 padding
-            if (m_hAttachedWnd) ::XWnd_Redraw(m_hAttachedWnd, FALSE);
+            _CXShadow_LiveRepaint(this);
+        } else if (!nowHide){
+            // 普通 resize 拖拽: padding 不变但 client 尺寸在变, 需每帧跟手重绘 halo.
+            _CXShadow_LiveRepaint(this);
         }
-        // 反方向 / 状态没变: 拖拽中不动, 等松手统一同步
+        // 进入 snap/max (nowHide && !wasHide): 仍延迟 ClearPadding 到松手, 不重绘.
         return;
     }
 
@@ -1151,9 +1143,8 @@ void CXShadow::DrawNormalPaint(HDRAW hDraw, int cw, int ch){
 void CXShadow::DrawMaximizedPaint(HDRAW hDraw, int cw, int ch){
     COLORREF bg = m_innerBgColor.load();
     if (GetRGBA_A(bg) == 0){
-        _XUITool::ThemePalette pal{};
-        _XUITool::ResolvePalette(_CXShadow_ToUitoolTheme(m_theme.load()), 0, 0, 0, &pal);
-        bg = pal.bg;
+        xuitool_theme_ uit = _CXShadow_ToUitoolTheme(m_theme.load());
+        bg = _CXShadow_DefaultInnerBg(_XUITool::EffectiveTheme(uit));
     }
     RECT rc = { 0, 0, cw, ch };
     ::XDraw_FillRectColor(hDraw, &rc, bg);

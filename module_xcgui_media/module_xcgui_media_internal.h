@@ -70,9 +70,18 @@ enum _XMedia_OpenProfile_
 
 int _XMedia_FF_InterruptCallback(void* opaque);
 
+// interrupt: 可选用户 abort + 绝对超时 (GetTickCount64 ms; 0=不限时).
+struct _XMedia_FF_InterruptCtx{
+	std::atomic<bool>* pUserAbort = NULL;
+	unsigned long long deadlineMs = 0;
+};
+
+int _XMedia_FF_InterruptCallbackEx(void* opaque);
+
 int _XMedia_FF_OpenWithOptions(AVFormatContext** ppFmt, const char* url,
                                _XMedia_OpenProfile_ profile,
-                               std::atomic<bool>* pAbort);
+                               std::atomic<bool>* pAbort,
+                               _XMedia_FF_InterruptCtx* pIntrCtx = NULL);
 
 std::string  _XMedia_FF_WideToUtf8(const std::wstring& w);
 std::wstring _XMedia_FF_ErrToWide(int err);
@@ -207,6 +216,16 @@ void _XMedia_Render_StretchBgraToDib(HDC dcMem, const uint8_t* bgra, int srcW, i
 void _XMedia_SizeMoveGuard_Attach(void* hEle, void (*onExit)(void*), void* user);
 void _XMedia_SizeMoveGuard_Detach(void* hEle, void* user);
 bool _XMedia_SizeMoveGuard_IsActive(void* hEle);
+
+// 宿主窗口是否可见 (FALSE = 销毁/隐藏/最小化). 用 Win32 HWND, 勿调 XWidget_IsShow.
+bool _XMedia_IsHostVisible(void* hEle);
+
+// media 自绘可视对象统一禁用 CSS，避免样式表覆盖 SetBkInfo / XE_PAINT 自绘。
+// 适用：CXEle / CXEdit / CXButton / CXShape*（XEle_Create / XEdit_Create / XBtn_Create / XShape*_Create 等）。
+inline void _XMedia_DisableCSS(HXCGUI h)
+{
+	if (h) XUI_EnableCSS(h, FALSE);
+}
 
 //@隐藏}
 #endif // XCGUI_MEDIA_INTERNAL_H

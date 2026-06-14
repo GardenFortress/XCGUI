@@ -1,4 +1,4 @@
-// CXCalendarCard 完整接口使用示例.
+﻿// CXCalendarCard 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXCalendarCard 全部静态 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp
@@ -90,6 +90,10 @@ void BuildCalendarDemo(HXCGUI hWnd)
 	g_hBtnSingle = XBtn_Create(20,  20, 140, 36, L"单月历选择", hWnd);
 	g_hBtnDouble = XBtn_Create(170, 20, 140, 36, L"双月历范围", hWnd);
 	g_hBtnToday  = XBtn_Create(320, 20, 140, 36, L"限制到今天", hWnd);
+
+	if (g_hBtnSingle) XUI_EnableCSS(g_hBtnSingle, FALSE);
+	if (g_hBtnDouble) XUI_EnableCSS(g_hBtnDouble, FALSE);
+	if (g_hBtnToday) XUI_EnableCSS(g_hBtnToday, FALSE);
 
 	XEle_RegEventC1(g_hBtnSingle, XE_BNCLICK, OnBtnSingleClick);
 	XEle_RegEventC1(g_hBtnDouble, XE_BNCLICK, OnBtnDoubleClick);

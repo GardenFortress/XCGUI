@@ -1,4 +1,4 @@
-// CXChatBubbleBox 完整接口使用示例.
+﻿// CXChatBubbleBox 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXChatBubbleBox 所有 public 方法 + 全部事件回调 +
 // 数据持久化 + 标签/名称/头像/颜色/圆角/字号/三态背景等所有可调样式.
 //
@@ -158,9 +158,15 @@ void DemoInsertMessages(CXChatBubbleBox& chat)
 	chat.InsertVideo(L"D:\\res\\v.mp4");
 	HELE hConfirm = XBtn_Create(0, 0, 60, 24, L"确认", NULL);
 	HELE hCancel  = XBtn_Create(0, 0, 60, 24, L"取消", NULL);
+	if (hConfirm) XUI_EnableCSS(hConfirm, FALSE);
+	if (hCancel) XUI_EnableCSS(hCancel, FALSE);
 	chat.InsertObjectEx(hConfirm, L"confirm");
 	chat.InsertObjectEx(hCancel,  L"cancel");
-	chat.InsertObject(XBtn_Create(0, 0, 60, 24, L"详情", NULL));
+	{
+		HELE hDetail = XBtn_Create(0, 0, 60, 24, L"详情", NULL);
+		if (hDetail) XUI_EnableCSS(hDetail, FALSE);
+		chat.InsertObject(hDetail);
+	}
 	chat.InsertBubbleEnd();
 
 	chat.InsertBubbleBeginEx(L"Alice (临时身份)", L"D:\\avatar\\alice2.png");

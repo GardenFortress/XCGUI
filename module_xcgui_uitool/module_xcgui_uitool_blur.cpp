@@ -263,22 +263,6 @@ enum _XBlur_PathKind {
 	XBLUR_PATH_DCOMP_WINRT,
 };
 
-// 用 RtlGetVersion 拿真实 OS build. 缓存一次, blur / dcomp 共用.
-DWORD XBlur_GetOsBuild(){
-	static DWORD s_build = 0;
-	if (s_build) return s_build;
-	HMODULE nt = ::GetModuleHandleW(L"ntdll.dll");
-	if (!nt){ s_build = 1; return s_build; }
-	typedef LONG (WINAPI* PFN_RtlGetVersion)(OSVERSIONINFOEXW*);
-	auto pRtl = (PFN_RtlGetVersion)::GetProcAddress(nt, "RtlGetVersion");
-	if (!pRtl){ s_build = 1; return s_build; }
-	OSVERSIONINFOEXW vi = {};
-	vi.dwOSVersionInfoSize = sizeof(vi);
-	if (pRtl(&vi) != 0){ s_build = 1; return s_build; }
-	s_build = vi.dwBuildNumber ? vi.dwBuildNumber : 1;
-	return s_build;
-}
-
 static bool XBlur_QuerySystemDarkMode(){
 	HKEY hk = NULL;
 	if (RegOpenKeyExW(HKEY_CURRENT_USER,
@@ -352,7 +336,7 @@ namespace {
 //   14393 ~ 16299      Win10 1607~1709  → ACCENT_BLURBEHIND (无 acrylic)
 //   < 14393            Win10 < 1607 / Win8 / 8.1 / Win7 → DECORATIVE
 static int XBlur_PickPath(){
-	DWORD b = XBlur_GetOsBuild();
+	DWORD b = XUITool_GetOsBuild();
 
 	// env XBLUR_FORCE_DCOMP=1: 回归测试用, 强制 AttachToEle/Wnd 走 dcomp 路径.
 	// 生产 AttachToWndEx 走独立 dcomp acrylic owner 子窗架构, 不经过 PickPath.
@@ -919,6 +903,7 @@ HELE CXBlur::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 
 	HELE hEle = XEle_Create(x, y, cx, cy, hParent);
 	if (!hEle) return NULL;
+	XUI_EnableCSS(hEle, FALSE);
 
 	AttachInternal(hEle, true);
 	return hEle;
@@ -973,6 +958,7 @@ BOOL CXBlur::AttachToWnd(HWINDOW hWnd){
 
 	HELE hEle = XEle_Create(0, 0, cx, cy, (HXCGUI)hWnd);
 	if (!hEle) return FALSE;
+	XUI_EnableCSS(hEle, FALSE);
 
 	XEle_SetZOrder(hEle, 0);                          // Z 序最底 (索引 0)
 	XWidget_SetID(hEle, 0xCB10A9DE);
@@ -1140,6 +1126,7 @@ void CXBlur::Detach(){
 void CXBlur::AttachInternal(HELE hEle, bool owned){
 	m_hEle  = hEle;
 	m_owned = owned;
+	XUI_EnableCSS(hEle, FALSE);
 
 	// 强制元素背景透明: 让 DWM acrylic 透过元素显示出来.
 	// XCGUI 没有 IsEnableBkTransparent getter, 假设原状态为 FALSE (默认),

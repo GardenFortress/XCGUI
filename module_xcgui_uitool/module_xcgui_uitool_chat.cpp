@@ -59,6 +59,7 @@ static int _xcchat_clamp(int v, int lo, int hi){ return v < lo ? lo : (v > hi ? 
 static void _xcchat_prepare_ele(HELE hEle)
 {
 	if (!hEle) return;
+	XUI_EnableCSS(hEle, FALSE);
 	XEle_EnableBkTransparent(hEle, TRUE);
 	XEle_EnableDrawBorder(hEle, FALSE);
 	// 所有走本助手的非 Shape 元素 (hRow / hAvatar / hName / hTag / hEdit / 可点击消息按钮 /
@@ -208,6 +209,7 @@ HELE CXChatBubbleBox::Create(int x, int y, int cx, int cy, HXCGUI hParent)
 {
 	m_hEle = XLayoutFrame_Create(x, y, cx, cy, hParent);
 	if (!m_hEle) return NULL;
+	XUI_EnableCSS(m_hEle, FALSE);
 	XLayoutBox_SetAlignV(m_hEle, layout_align_top);
 	XLayoutBox_SetAlignH(m_hEle, layout_align_left);
 	// 行间距 + 上下留白交给 XLayoutBox/Padding, 不再用 RelayoutNode 里的手算 y. 之前在
@@ -841,6 +843,7 @@ void CXChatBubbleBox::BuildNode(_xcgui_chat_node_* pNode)
 		XEle_EnableDrawBorder(pNode->hRow, FALSE);
 		pNode->hCenterText = XShapeText_Create(0, 0, 240, 26, pNode->data.displayText.getPtr(), pNode->hRow);
 		if (pNode->hCenterText){
+			XUI_EnableCSS(pNode->hCenterText, FALSE);
 			XShapeText_SetTextAlign(pNode->hCenterText, textAlignFlag_center | textAlignFlag_vcenter);
 			XShapeText_SetTextColor(pNode->hCenterText, m_messageTextColor);
 			if (m_messageFont) XShapeText_SetFont(pNode->hCenterText, m_messageFont);
@@ -1544,6 +1547,7 @@ static HXCGUI _ReadObjectDesc(CbDeserCursor& r, HXCGUI hParent)
 		XEle_SetTextColor(hEle, (COLORREF)tc);
 		hNew = (HXCGUI)hEle;
 	}
+	if (hNew) XUI_EnableCSS(hNew, FALSE);
 	return hNew;
 }
 

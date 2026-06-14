@@ -61,6 +61,7 @@ HELE CXImageEx::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 	// 普通 XEle 元素就够 - 也避开 CXLayout default mouse-through 等需要额外配置的细节.
 	HELE h = XEle_Create(x, y, cx, cy, hParent);
 	if (!h) return NULL;
+	XUI_EnableCSS(h, FALSE);
 	AttachInternal(h);
 	return h;
 }
@@ -112,6 +113,7 @@ void CXImageEx::operator=(const HELE hEle){
 void CXImageEx::AttachInternal(HELE hEle){
 	// 进入前调用方已保证 hEle 合法且本对象未持其它 HELE.
 	m_hEle = hEle;
+	XUI_EnableCSS(hEle, FALSE);
 	RefreshDpiScale();
 	RebuildBkInfo();
 	InstallEvents();
@@ -232,8 +234,9 @@ int CXImageEx::OnTimerImpl(HELE /*hEle*/, UINT nTimerId, BOOL* /*pbHandled*/){
 	//    再次调 LoadFromFile 也不会撞重入.
 	DispatchPendingCallbacks();
 
-	// 2) 动画推进. 只在 playing 状态时做.
-	if (m_state.load(std::memory_order_acquire) == ximage_state_playing){
+	// 2) 动画推进. 只在 playing 且宿主可见时做 (最小化时不浪费 CPU swscale/redraw).
+	if (m_state.load(std::memory_order_acquire) == ximage_state_playing
+	    && _XMedia_IsHostVisible((void*)m_hEle)){
 		AdvanceFrameIfDue();
 	}
 	return 0;

@@ -32,8 +32,6 @@
 
 #include "module_xcgui_blur_dcomp.h"
 
-extern DWORD XBlur_GetOsBuild();
-
 // 独立编译时前向声明; uitool 聚合 TU 内 module_xcgui.h 已定义 HWINDOW.
 #ifndef XCGUI_H
 typedef void* HWINDOW;
@@ -698,7 +696,7 @@ bool IsSupported() {
     int cached = sTriState.load(std::memory_order_relaxed);
     if (cached >= 0) return cached != 0;
     bool ok = false;
-    if (XBlur_GetOsBuild() >= 17134) {
+    if (XUITool_GetOsBuild() >= 17134) {
         // build + 运行时 DLL 探测 (DELAYLOAD 下 LoadLibrary 安全).
         HMODULE hDcomp = ::LoadLibraryW(L"dcomp.dll");
         HMODULE hCoreMsg = ::LoadLibraryW(L"CoreMessaging.dll");

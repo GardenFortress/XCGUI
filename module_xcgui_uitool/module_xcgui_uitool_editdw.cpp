@@ -665,6 +665,7 @@ CXEditDW::~CXEditDW(){
 HELE CXEditDW::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 	m_hEle = XSView_Create(x, y, cx, cy, hParent);
 	if (!m_hEle) return NULL;
+	XUI_EnableCSS(m_hEle, FALSE);
 	RefreshDpiScale();
 	// XSView_* 接口一律以 *逻辑像素* 为单位 (与其他 XCGUI 布局 API 一致):
 	// 行高、页高、SetTotalSize、ViewPos、ViewWidth/Height 都是逻辑. *不要乘 m_dpiScale*.
@@ -1451,6 +1452,7 @@ BOOL CXEditDW::InsertImageThumb(const wchar_t* pPath){
 		XImage_Release(hImage);
 		return FALSE;
 	}
+	XUI_EnableCSS(hShape, FALSE);
 	// fixed_ratio: 主要给 SVG 兜底路径 (shape rect 可能小于 image) 兜底; GDI+ 预缩放路径下
 	// shape rect 与 HIMAGE 1:1, fixed_ratio 也是 no-op. 保留这行更安全 (将来 shape rect 被
 	// 外部代码改大改小都不会变形).
@@ -2043,6 +2045,7 @@ HXCGUI CXEditDW::CloneInlineHandle(HXCGUI hSrc){
 		const wchar_t* text = XShapeText_GetText(hSrc);
 		HXCGUI hNew = XShapeText_Create(0, 0, w, h, text ? text : L"", (HXCGUI)m_hEle);
 		if (hNew){
+			XUI_EnableCSS(hNew, FALSE);
 			XShapeText_SetTextColor(hNew, XShapeText_GetTextColor(hSrc));
 		}
 		return hNew;
@@ -2052,6 +2055,7 @@ HXCGUI CXEditDW::CloneInlineHandle(HXCGUI hSrc){
 		int h = XShape_GetHeight(hSrc);
 		HXCGUI hNew = XShapePic_Create(0, 0, w, h, (HXCGUI)m_hEle);
 		if (hNew){
+			XUI_EnableCSS(hNew, FALSE);
 			HIMAGE hImg = XShapePic_GetImage(hSrc);
 			if (hImg){
 				// 不调 XImage_AddRef: XShapePic_SetImage 内部已经 AddRef, 调用方再 AddRef
@@ -2069,6 +2073,7 @@ HXCGUI CXEditDW::CloneInlineHandle(HXCGUI hSrc){
 		const wchar_t* text = XBtn_GetText((HELE)hSrc);
 		HELE hNew = XBtn_Create(0, 0, w, h, text ? text : L"", (HXCGUI)m_hEle);
 		if (hNew){
+			XUI_EnableCSS(hNew, FALSE);
 			HIMAGE hIcon = XBtn_GetIcon((HELE)hSrc, 0);
 			if (hIcon){
 				XImage_AddRef(hIcon);                 // 多按钮共享同一图源, 安全
@@ -2100,6 +2105,7 @@ HXCGUI CXEditDW::CloneInlineHandle(HXCGUI hSrc){
 		int h = XEle_GetHeight((HELE)hSrc);
 		HELE hNew = XEle_Create(0, 0, w, h, (HXCGUI)m_hEle);
 		if (hNew){
+			XUI_EnableCSS(hNew, FALSE);
 			CopyCommonEleProps((HELE)hSrc, hNew);
 		}
 		return (HXCGUI)hNew;
@@ -2714,6 +2720,7 @@ BOOL CXEditDW::LoadFromMem(const void* pData, size_t size){
 					ComputeThumbSize(tw, th, rw, rh);
 					HXCGUI hShape = XShapePic_Create(0, 0, rw, rh, (HXCGUI)m_hEle);
 					if (hShape){
+						XUI_EnableCSS(hShape, FALSE);
 						XImage_SetDrawType(hImg, image_draw_type_fixed_ratio);
 						XShapePic_SetImage(hShape, hImg);   // 转移 ref
 						ns.type          = 2;
@@ -2779,6 +2786,7 @@ BOOL CXEditDW::LoadFromMem(const void* pData, size_t size){
 					hNew = (HXCGUI)hEle;
 				}
 				if (hNew){
+					XUI_EnableCSS(hNew, FALSE);
 					ns.type          = 2;
 					ns.hFontImageObj = hNew;
 				}

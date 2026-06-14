@@ -1,4 +1,4 @@
-// CXBlur 完整接口使用示例.
+﻿// CXBlur 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXBlur 全部 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp

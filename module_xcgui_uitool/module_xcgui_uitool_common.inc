@@ -1,9 +1,51 @@
-//============================================================================
-// module_xcgui_uitool_common.inc — _XUITool 主题层 (tooltip / loading / calendar / shadow 共用)
+﻿//============================================================================
+// module_xcgui_uitool_common.inc — uitool 公共运行时 (系统环境 + _XUITool 主题层)
 // 由 module_xcgui_uitool.cpp 聚合 TU #include; split 可条件 #include (见各 split 顶部).
 //============================================================================
 #ifndef _XCGUI_UITOOL_COMMON_INC_
 #define _XCGUI_UITOOL_COMMON_INC_
+
+DWORD XUITool_GetOsBuild()
+{
+	static DWORD s_build = 0;
+	if (s_build) return s_build;
+	HMODULE nt = ::GetModuleHandleW(L"ntdll.dll");
+	if (!nt){ s_build = 1; return s_build; }
+	typedef LONG (WINAPI* PFN_RtlGetVersion)(OSVERSIONINFOEXW*);
+	auto pRtl = (PFN_RtlGetVersion)::GetProcAddress(nt, "RtlGetVersion");
+	if (!pRtl){ s_build = 1; return s_build; }
+	OSVERSIONINFOEXW vi = {};
+	vi.dwOSVersionInfoSize = sizeof(vi);
+	if (pRtl(&vi) != 0){ s_build = 1; return s_build; }
+	s_build = vi.dwBuildNumber ? vi.dwBuildNumber : 1;
+	return s_build;
+}
+
+int GetCurrentVersion()
+{
+	DWORD build = XUITool_GetOsBuild();
+	if (build >= 22000) return 11;
+	if (build >= 10240) return 10;
+	// build 无法区分 Win7/8/8.1, 回退 RtlGetVersion 读 major/minor
+	HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+	if (hMod) {
+		typedef LONG(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+		RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hMod, "RtlGetVersion");
+		if (RtlGetVersion) {
+			RTL_OSVERSIONINFOW osvi = { 0 };
+			osvi.dwOSVersionInfoSize = sizeof(osvi);
+			if (RtlGetVersion(&osvi) == 0) {
+				DWORD major = osvi.dwMajorVersion;
+				DWORD minor = osvi.dwMinorVersion;
+				if (major == 10) return 10;
+				if (major == 6 && minor >= 2) return 8;
+				if (major == 6 && minor == 1) return 7;
+			}
+		}
+	}
+	return 0;
+}
+
 namespace _XUITool {
 constexpr int kCornerRadius = 8;
 

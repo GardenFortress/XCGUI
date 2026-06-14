@@ -120,7 +120,7 @@ extern "C" {
 
 ///图片适配模式 (CXImageEx::SetFitMode). 数值与 xmedia_fit_mode_ 一致.
 //@别名 图片适配模式
-enum ximage_fit_mode_ : int
+enum ximage_fit_mode_
 {
 	//@别名 图片适配模式_等比适应
 	ximage_fit_contain  = (int)xmedia_fit_contain,    ///<等比缩放, 长边贴边, 边距留底色 (默认, letter-box)
@@ -686,7 +686,7 @@ private:
 
 ///视频画面适配模式 (CXVideo::SetFitMode). 数值与 xmedia_fit_mode_ 一致.
 //@别名 视频适配模式
-enum xvideo_fit_mode_ : int
+enum xvideo_fit_mode_
 {
 	//@别名 视频适配模式_等比适应
 	xvideo_fit_contain  = (int)xmedia_fit_contain,    ///<等比缩放, 长边贴边, 黑边补足 (默认, letter-box / pillar-box)
@@ -1279,7 +1279,6 @@ private:
 	std::atomic<bool> m_demuxEof{false};
 
 	// ===== Seek 协议 =====
-	// 步骤 (在 demux 线程上完成):
 	//   (1) UI 线程 Seek(): m_seekRequest = true; m_seekTargetSec = target;
 	//   (2) demux 线程检测 m_seekRequest, 把 packetQ / frameQ 全部 Clear,
 	//       推 PacketNode{flush=true} 给两路解码线程, 调 av_seek_frame, 设
@@ -1295,6 +1294,8 @@ private:
 	// 用户看到 "回弹" 闪一下. 解法: 这个标志在 Seek() 时置 true, demux 把 seek 全部处理
 	// 完 (清队列 + flush + 时钟归位) 后才置 false; UpdateControlBarPosition 期间整体跳过.
 	std::atomic<bool>   m_seekInFlight{false};
+	// decode 线程 seek flush 后: 丢弃 PTS 严格小于 seek 目标的 B 帧/P 帧 (VLC es_out discard).
+	std::atomic<double> m_vDecodeDiscardBeforeSec{-1.0};
 
 	// ===== 时钟 (A/V 同步) =====
 	// 主时钟: 有音频时 = m_audioClock (音频渲染线程在每次 WASAPI 写入后更新);

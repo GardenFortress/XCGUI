@@ -1,4 +1,4 @@
-// CXTooltip 完整接口使用示例.
+﻿// CXTooltip 完整接口使用示例.
 // 覆盖 module_xcgui_uitool.h 中 CXTooltip 全部静态 public 方法.
 //
 // 编译依赖: @依赖 module_xcgui_uitool.h + @src module_xcgui_uitool.cpp
@@ -103,6 +103,14 @@ void BuildTooltipDemo(HXCGUI hWnd)
 	g_hBtnError   = XBtn_Create(20,  70, 100, 32, L"错误",   hWnd);
 	g_hBtnMulti   = XBtn_Create(130, 70, 160, 32, L"多行提示", hWnd);
 	g_hBtnCustom  = XBtn_Create(300, 70, 160, 32, L"自定义",  hWnd);
+
+	if (g_hBtnDefault) XUI_EnableCSS(g_hBtnDefault, FALSE);
+	if (g_hBtnSuccess) XUI_EnableCSS(g_hBtnSuccess, FALSE);
+	if (g_hBtnInfo) XUI_EnableCSS(g_hBtnInfo, FALSE);
+	if (g_hBtnWarning) XUI_EnableCSS(g_hBtnWarning, FALSE);
+	if (g_hBtnError) XUI_EnableCSS(g_hBtnError, FALSE);
+	if (g_hBtnMulti) XUI_EnableCSS(g_hBtnMulti, FALSE);
+	if (g_hBtnCustom) XUI_EnableCSS(g_hBtnCustom, FALSE);
 
 	SetupTooltipStyles();
 	DemoTooltipGetAndModify();

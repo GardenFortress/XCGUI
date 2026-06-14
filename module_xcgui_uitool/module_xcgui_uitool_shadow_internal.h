@@ -1,4 +1,4 @@
-#ifndef XCGUI_UITOOL_SHADOW_INTERNAL_H
+﻿#ifndef XCGUI_UITOOL_SHADOW_INTERNAL_H
 #define XCGUI_UITOOL_SHADOW_INTERNAL_H
 // CXShadow 模块级全局状态 — InitOnce + SRWLOCK, 仅 module_xcgui_uitool.cpp 定义.
 #ifndef WIN32_LEAN_AND_MEAN
