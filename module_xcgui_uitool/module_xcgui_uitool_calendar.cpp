@@ -369,6 +369,12 @@ int _XCal_StartIndex(int year, int month)
 	return (wd == 0) ? 6 : (wd - 1);
 }
 
+BOOL _XCal_IsValidInputDate(const xcalendar_datetime_* p)
+{
+	// year<=0 视为未设置; year 过小(如未初始化栈垃圾 1)也视为无效, 与 PopupDouble 默认今天行为一致.
+	return p && p->year >= 1900;
+}
+
 xcalendar_datetime_ _XCal_Normalize(xcalendar_datetime_ d)
 {
 	if (d.year < 1) d.year = 1;
@@ -1651,12 +1657,12 @@ BOOL _XCal_Show(_XCal_Mode mode, BOOL doubleMonth, HWINDOW hParent,
 	todayEnd.minute = 59;
 	todayEnd.second = 59;
 
-	if (pStart && pStart->year > 0) ctx->selStart = _XCal_Normalize(*pStart);
+	if (_XCal_IsValidInputDate(pStart)) ctx->selStart = _XCal_Normalize(*pStart);
 	else ctx->selStart = todayStart;
 	ctx->selStart = _XCal_ClampMaxDate(ctx, ctx->selStart, FALSE);
 
 	if (mode == _XCal_Mode_Range){
-		if (pEnd && pEnd->year > 0) ctx->selEnd = _XCal_Normalize(*pEnd);
+		if (_XCal_IsValidInputDate(pEnd)) ctx->selEnd = _XCal_Normalize(*pEnd);
 		else ctx->selEnd = todayEnd;
 		ctx->selEnd = _XCal_ClampMaxDate(ctx, ctx->selEnd, TRUE);
 		if (_XCal_CompareFull(ctx->selStart, ctx->selEnd) > 0){
@@ -1769,7 +1775,11 @@ BOOL CXCalendarCard::PopupSingle(HWINDOW hParent, xcalendar_datetime_* pDate,
 	BOOL bLimitMaxDate, xuitool_theme_ theme, const xcalendar_datetime_* pMaxDate,
 	int nCornerRadius)
 {
-	xcalendar_datetime_ d = pDate ? *pDate : xcalendar_datetime_{};
+	xcalendar_datetime_ d = _XCal_Current();
+	d.hour = 0;
+	d.minute = 0;
+	d.second = 0;
+	if (_XCal_IsValidInputDate(pDate)) d = *pDate;
 	BOOL ok = _XCal_Show(_XCal_Mode_Single, FALSE, hParent, &d, NULL,
 		bLimitMaxDate, pMaxDate, theme, nCornerRadius);
 	if (ok && pDate) *pDate = d;
@@ -1780,8 +1790,16 @@ BOOL CXCalendarCard::PopupDouble(HWINDOW hParent, xcalendar_datetime_* pStart, x
 	BOOL bLimitMaxDate, xuitool_theme_ theme, const xcalendar_datetime_* pMaxDate,
 	int nCornerRadius)
 {
-	xcalendar_datetime_ s = pStart ? *pStart : xcalendar_datetime_{};
-	xcalendar_datetime_ e = pEnd ? *pEnd : xcalendar_datetime_{};
+	xcalendar_datetime_ s = _XCal_Current();
+	s.hour = 0;
+	s.minute = 0;
+	s.second = 0;
+	xcalendar_datetime_ e = s;
+	e.hour = 23;
+	e.minute = 59;
+	e.second = 59;
+	if (_XCal_IsValidInputDate(pStart)) s = *pStart;
+	if (_XCal_IsValidInputDate(pEnd)) e = *pEnd;
 	BOOL ok = _XCal_Show(_XCal_Mode_Range, TRUE, hParent, &s, &e,
 		bLimitMaxDate, pMaxDate, theme, nCornerRadius);
 	if (ok){
