@@ -668,7 +668,6 @@ xcolor_input_mode_ _XClr_ModeFromComboIndex(int iItem)
 	return xcolor_input_hex;
 }
 
-int CALLBACK _XClr_OnEditKillFocus(HELE hEle, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditKeyDown(HELE hEle, int iChar, int, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditLButtonDBClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditChar(HELE hEle, WPARAM wParam, LPARAM, BOOL* pbHandled);
@@ -1690,7 +1689,6 @@ int CALLBACK _XClr_OnSwatchDblClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnSwatchRButtonUp(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnAddSlotClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnWndMouseMove(HWINDOW hWnd, UINT nFlags, POINT* pPt, BOOL* pbHandled);
-int CALLBACK _XClr_OnEditKillFocus(HELE hEle, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditKeyDown(HELE hEle, int iChar, int, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditLButtonDBClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditChar(HELE hEle, WPARAM wParam, LPARAM, BOOL* pbHandled);
@@ -1884,7 +1882,6 @@ void _XClr_FormatCopyColorText(_XClr_Ctx* ctx, wchar_t* buf, size_t bufCount)
 void _XClr_RegisterModeEditEvents(HELE edit)
 {
 	if (!edit) return;
-	XEle_RegEventC1(edit, XE_KILLFOCUS, (void*)&_XClr_OnEditKillFocus);
 	XEle_RegEventC1(edit, XE_KEYDOWN, (void*)&_XClr_OnEditKeyDown);
 	XEle_RegEventC1(edit, XE_LBUTTONDBCLICK, (void*)&_XClr_OnEditLButtonDBClick);
 	XEle_RegEventC1(edit, XE_CHAR, (void*)&_XClr_OnEditChar);
@@ -1946,6 +1943,74 @@ BOOL _XClr_SanitizeEditText(_XClr_Ctx* ctx, HELE hEdit, wchar_t* buf, size_t buf
 	out[n] = L'\0';
 	if (wcscmp(buf, out) == 0) return FALSE;
 	wcscpy_s(buf, bufCount, out);
+	return TRUE;
+}
+
+BOOL _XClr_EditValueRange(_XClr_Ctx* ctx, HELE hEdit, int* outMin, int* outMax)
+{
+	if (!ctx || !hEdit || !outMin || !outMax) return FALSE;
+	*outMin = 0;
+	if (hEdit == ctx->hEditR || hEdit == ctx->hEditG || hEdit == ctx->hEditB){
+		*outMax = 255;
+		return TRUE;
+	}
+	if (hEdit == ctx->hEditH){
+		*outMax = 359;
+		return TRUE;
+	}
+	if (hEdit == ctx->hEditS || hEdit == ctx->hEditL || hEdit == ctx->hEditAlphaPct){
+		*outMax = 100;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+BOOL _XClr_BuildEditPreviewWithChar(HELE hEdit, wchar_t c, wchar_t* out, size_t outCount)
+{
+	if (!hEdit || !out || outCount == 0) return FALSE;
+	const wchar_t* txt = XEdit_GetText_Temp(hEdit);
+	if (!txt) txt = L"";
+	int len = (int)wcslen(txt);
+	int pos = XEdit_GetCurPos(hEdit);
+	int selLen = XEdit_GetSelectTextLength(hEdit);
+	int start = pos;
+	int end = pos + selLen;
+	if (start < 0) start = 0;
+	if (start > len) start = len;
+	if (end < start) end = start;
+	if (end > len) end = len;
+
+	int outN = 0;
+	for (int i = 0; i < start && outN + 1 < (int)outCount; ++i)
+		out[outN++] = txt[i];
+	if (outN + 1 >= (int)outCount) return FALSE;
+	out[outN++] = c;
+	for (int i = end; txt[i] && outN + 1 < (int)outCount; ++i)
+		out[outN++] = txt[i];
+	out[outN] = L'\0';
+	return TRUE;
+}
+
+BOOL _XClr_PreviewCharExceedsRange(_XClr_Ctx* ctx, HELE hEdit, wchar_t c)
+{
+	int minV = 0, maxV = 0;
+	if (!_XClr_EditValueRange(ctx, hEdit, &minV, &maxV)) return FALSE;
+	wchar_t preview[16]{};
+	if (!_XClr_BuildEditPreviewWithChar(hEdit, c, preview, _countof(preview))) return TRUE;
+	if (!preview[0]) return FALSE;
+	int v = _wtoi(preview);
+	return v > maxV;
+}
+
+BOOL _XClr_ClampEditValueText(_XClr_Ctx* ctx, HELE hEdit, wchar_t* buf, size_t bufCount)
+{
+	if (!ctx || !hEdit || !buf || bufCount == 0 || !buf[0]) return FALSE;
+	int minV = 0, maxV = 0;
+	if (!_XClr_EditValueRange(ctx, hEdit, &minV, &maxV)) return FALSE;
+	int v = _wtoi(buf);
+	int clamped = _XClr_ClampI(v, minV, maxV);
+	if (v == clamped) return FALSE;
+	swprintf_s(buf, bufCount, L"%d", clamped);
 	return TRUE;
 }
 
@@ -2572,12 +2637,6 @@ int CALLBACK _XClr_OnWndKillFocus(HWINDOW hWnd, BOOL* pbHandled)
 	return 0;
 }
 
-int CALLBACK _XClr_OnEditKillFocus(HELE hEle, BOOL* pbHandled)
-{
-	if (pbHandled) *pbHandled = FALSE;
-	return 0;
-}
-
 int CALLBACK _XClr_OnEditKeyDown(HELE hEle, int iChar, int, BOOL* pbHandled)
 {
 	if (pbHandled) *pbHandled = FALSE;
@@ -2616,7 +2675,8 @@ int CALLBACK _XClr_OnEditChar(HELE hEle, WPARAM wParam, LPARAM, BOOL* pbHandled)
 	wchar_t c = (wchar_t)wParam;
 	if (c < 0x20) return 0;
 
-	if (!_XClr_IsEditCharAllowed(ctx, hEle, c) || _XClr_EditWouldExceedMaxLen(hEle, maxLen)){
+	if (!_XClr_IsEditCharAllowed(ctx, hEle, c) || _XClr_EditWouldExceedMaxLen(hEle, maxLen) ||
+		_XClr_PreviewCharExceedsRange(ctx, hEle, c)){
 		if (pbHandled) *pbHandled = TRUE;
 		return 0;
 	}
@@ -2633,11 +2693,20 @@ int CALLBACK _XClr_OnEditChanged(HELE hEle, BOOL* pbHandled)
 	const wchar_t* txt = XEdit_GetText_Temp(hEle);
 	wchar_t buf[16]{};
 	if (txt) wcscpy_s(buf, txt);
-	if (!_XClr_SanitizeEditText(ctx, hEle, buf, _countof(buf))) return 0;
 
-	ctx->updatingUI = TRUE;
-	XEdit_SetText(hEle, buf);
-	ctx->updatingUI = FALSE;
+	BOOL changed = FALSE;
+	if (_XClr_SanitizeEditText(ctx, hEle, buf, _countof(buf)))
+		changed = TRUE;
+	if (_XClr_ClampEditValueText(ctx, hEle, buf, _countof(buf)))
+		changed = TRUE;
+
+	if (changed){
+		ctx->updatingUI = TRUE;
+		XEdit_SetText(hEle, buf);
+		ctx->updatingUI = FALSE;
+	}
+
+	_XClr_ParseEditInput(ctx, hEle, TRUE);
 	return 0;
 }
 
