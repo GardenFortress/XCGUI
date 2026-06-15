@@ -225,7 +225,7 @@ swresample-*.dll  swscale-*.dll  avdevice-*.dll
 ```
 
 - 新版 FFmpeg：<https://www.gyan.dev/ffmpeg/builds/>
-- Win7 须用 **4.4.x**：<https://github.com/GyanD/codexffmpeg/releases/tag/4.4.3>
+- Win7 须用 **4.4.x**：<https://github.com/GyanD/codexffmpeg/releases/tag/4.4.1>
 
 ## 许可证
 
