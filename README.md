@@ -7,7 +7,7 @@
 | 模块 | 类 | 用途 |
 |---|---|---|
 | [`module_xcgui_media`](./module_xcgui_media/) | `CXImageEx` / `CXVideo` | 图片 + 视频播放，共享 FFmpeg / 渲染内核 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` / `CXCardPanel` / `CXSteps` / `CXColorPicker` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板、卡片面板、步骤条、颜色选择器 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` / `CXCardPanel` / `CXSteps` / `CXColorPicker` / `CXCheckAnim` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板、卡片面板、步骤条、颜色选择器、多选框动画 |
 
 旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
@@ -204,6 +204,22 @@ if (CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto, 10, TRUE, xcolo
 ```
 
 详见 [`demo_colorpicker.cpp`](./module_xcgui_uitool/示例/demo_colorpicker.cpp)。
+
+### CXCheckAnim
+
+WinUI3 风格 Toggle 多选框动画，附加到已有 `XC_BUTTON` 按钮，支持深/浅主题与文本左右对齐。
+
+```cpp
+HELE hBtn = XBtn_Create(16, 40, 200, 20, L"启用通知", hParent);
+XUI_EnableCSS(hBtn, FALSE);
+XBtn_SetCheck(hBtn, TRUE);
+CXCheckAnim::AttachBtn(hBtn, 0, 20, xuitool_theme_dark);
+CXCheckAnim::SetTextAlign(hBtn, xcheckanim_text_align_right);
+CXCheckAnim::SetAnimEnabled(hBtn, TRUE);
+// 进程退出前: CXCheckAnim::Cleanup();
+```
+
+详见 [`demo_checkanim.cpp`](./module_xcgui_uitool/示例/demo_checkanim.cpp)。
 
 ## 兼容性
 

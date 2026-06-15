@@ -84,7 +84,7 @@ static void DemoEditTextAndStyle(CXEditDW& edit)
 	editdw_style_info_ info;
 	edit.GetStyleInfo(iRed, &info);
 
-	HFONTX hFont = XFont_Create(L"Arial", 12, fontStyle_regular);
+	HFONTX hFont = XFont_CreateEx(L"Arial", 12, fontStyle_regular);
 	edit.ModifyStyle(iBlue, hFont, RGBA(0x00, 0x00, 0xFF, 0xFF), TRUE);
 
 	HELE hBtn = XBtn_Create(0, 0, 48, 24, L"OK", edit);

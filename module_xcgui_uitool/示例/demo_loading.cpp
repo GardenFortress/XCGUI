@@ -39,7 +39,7 @@ static void SetupLoadingOnWnd(HWINDOW hWnd)
 	// CXLoading::Start(hWnd);  // 默认 Create/Attach 后已启动, 可按需 Stop/Start
 }
 
-static void SetupLoadingCreate(HELE hParent)
+static void SetupLoadingCreate(HXCGUI hParent)
 {
 	g_hLoadingEle = CXLoading::Create(20, 120, 200, 120, hParent);
 	CXLoading::SetStyle(g_hLoadingEle, xloading_style_bars);
@@ -106,7 +106,7 @@ void BuildLoadingDemo(HXCGUI hWnd)
 {
 	g_hWnd = (HWINDOW)hWnd;
 	g_hPanel = XLayout_Create(20, 20, 360, 80, hWnd);
-	XEle_SetBkColor(g_hPanel, RGB(0xF0, 0xF0, 0xF0));
+	XEle_AddBkFill(g_hPanel, 0, RGB(0xF0, 0xF0, 0xF0));
 
 	SetupLoadingOnEle(g_hPanel);
 	SetupLoadingOnWnd(g_hWnd);

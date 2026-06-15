@@ -17,7 +17,7 @@ static HELE    g_hUserEle  = NULL;
 // 1. 三种绑定: Create / AttachToEle / AttachToWnd / AttachToWndEx
 // =============================================================================
 
-static void SetupBlurOwn(HELE hParent)
+static void SetupBlurOwn(HXCGUI hParent)
 {
 	g_pBlurOwn = new CXBlur();
 	g_pBlurOwn->Create(20, 20, 200, 160, hParent);
@@ -27,7 +27,7 @@ static void SetupBlurOwn(HELE hParent)
 	g_pBlurOwn->SetBorderWidth(1.0f);
 }
 
-static void SetupBlurAttachEle(HELE hParent)
+static void SetupBlurAttachEle(HXCGUI hParent)
 {
 	g_hUserEle = XLayout_Create(240, 20, 200, 160, hParent);
 	XEle_EnableBkTransparent(g_hUserEle, TRUE);

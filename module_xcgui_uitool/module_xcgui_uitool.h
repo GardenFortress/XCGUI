@@ -11,8 +11,9 @@
 //          XCGUI 别名工具会逐个识别. 不再用嵌套 class 形式 (扫描器不识别).
 //
 //          已实现的顶层类:
-//          模块内主题: CXTooltip / CXLoading / CXCalendarCard 共用 xuitool_theme_ 与
-//            _XUITool 主题层 (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
+//          模块内主题: CXTooltip / CXLoading / CXCalendarCard / CXAccordion / CXCardPanel /
+//            CXSteps / CXColorPicker / CXCheckAnim 共用 xuitool_theme_ 与 _XUITool 主题层
+//            (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
 //          [1] CXTooltip — 鼠标悬停气泡提示
 //            - 全局静态注册表 + 共享气泡窗口, 同一时刻至多 1 个气泡显示.
 //            - 支持 普通 / 成功 / 信息 / 警告 / 错误 5 种语义 (后 4 个用内置 SVG 图标).
@@ -45,6 +46,7 @@
 //          [9] CXCardPanel — 卡片面板 (组标题 + 圆角卡片, 设置页风格)
 //          [10] CXSteps — 步骤条 (水平/垂直向导进度, 深/浅主题)
 //          [11] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
+//          [12] CXCheckAnim — WinUI3 风格多选框 (Toggle) 动画附加
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -99,6 +101,7 @@ class CXAccordion;
 class CXCardPanel;
 class CXSteps;
 class CXColorPicker;
+class CXCheckAnim;
 //@隐藏}
 
 //@分组{ 系统环境
@@ -4727,6 +4730,112 @@ public:
 	int m_vertTextColW;
 	std::vector<int> m_stepOrder;
 	std::unordered_map<int, _XSteps_StepState*> m_steps;
+	//@隐藏}
+};
+//@分组}
+
+///<多选框动画 — 文本相对开关的位置
+//@别名 多选框文本对齐
+enum xcheckanim_text_align_
+{
+	//@别名 多选框文本对齐_左
+	xcheckanim_text_align_left  = 0,   ///<开关在左, 文本在右 (文本左对齐, 默认)
+	//@别名 多选框文本对齐_右
+	xcheckanim_text_align_right = 1,   ///<开关在右, 文本在左 (文本右对齐)
+};
+
+//@分组{ 多选框动画
+//@备注  WinUI3 风格 Toggle 多选框动画工具类, 全静态方法. 将已有 HELE 按钮转为
+//       自绘开关: 背景透明 + XE_PAINT 强制覆盖 + 6 态着色 + 按下拉长前台圆点 +
+//       弹起区外取消. 每个按钮独立动画组, 互斥不叠加.
+//       调用形如: CXCheckAnim::AttachBtn(hBtn);
+//@别名  炫彩多选框动画类
+class CXCheckAnim
+{
+public:
+
+//@备注 附加到已有按钮. 非 XC_BUTTON 返回 FALSE; 非 check 类型自动设为 button_type_check.
+//      启用背景透明, 隐藏按钮标题 (缓存至内部), 注册绘制/鼠标/选中事件.
+//      宽度: 标题为空 = 32px; 有标题 = 标题宽 + 6px 间距 + 32px 开关区.
+//      若传入 nWidth 小于上述最小宽则抬升至最小宽; 足够则保持 nWidth.
+//      高度固定 20px (nHeight 默认 20).
+//      theme 决定 §8 深/浅轨道配色: 须显式 xuitool_theme_dark 或 xuitool_theme_light;
+//      auto 仅跟随系统, 同一窗口内多块区域请分别传入对应主题.
+//@参数 hBtn 按钮句柄 (HELE, 必须 XC_BUTTON)
+//@参数 nWidth 期望宽度, 0 = 按标题自动计算最小宽
+//@参数 nHeight 期望高度, 默认 20
+//@参数 theme 深/浅主题, 默认 auto (跟随系统)
+//@返回 成功 TRUE
+//@别名  附加按钮()
+	static BOOL AttachBtn(HELE hBtn, UINT nWidth = 0, UINT nHeight = 20,
+		xuitool_theme_ theme = xuitool_theme_auto);
+
+//@备注 解除附加, 停止动画, 反注册事件, 恢复缓存标题到 XBtn_SetText.
+//@参数 hBtn 按钮句柄
+//@返回 成功 TRUE
+//@别名  解除附加()
+	static BOOL Detach(HELE hBtn);
+
+//@备注 是否已附加多选框动画.
+//@参数 hBtn 按钮句柄
+//@返回 已附加 TRUE
+//@别名  是否已附加()
+	static BOOL HasAttached(HELE hBtn);
+
+//@备注 启用/禁用过渡动画 (轨道色 / 圆点位置 / 按下拉长). 默认 TRUE.
+//@参数 hBtn 按钮句柄
+//@参数 bEnable TRUE=启用动画
+//@返回 成功 TRUE
+//@别名  启用动画过渡()
+	static BOOL SetAnimEnabled(HELE hBtn, BOOL bEnable);
+
+//@备注 查询是否启用过渡动画.
+//@参数 hBtn 按钮句柄
+//@返回 启用 TRUE
+//@别名  是否启用动画过渡()
+	static BOOL IsAnimEnabled(HELE hBtn);
+
+//@备注 设置标题文本相对开关的对齐: 左 = 开关在左 (默认); 右 = 开关在右. 可在 AttachBtn 前后调用.
+//@参数 hBtn 按钮句柄
+//@参数 align 对齐枚举
+//@返回 成功 TRUE
+//@别名  置文本对齐()
+	static BOOL SetTextAlign(HELE hBtn, xcheckanim_text_align_ align);
+
+//@备注 取文本对齐.
+//@参数 hBtn 按钮句柄
+//@返回 对齐枚举
+//@别名  取文本对齐()
+	static xcheckanim_text_align_ GetTextAlign(HELE hBtn);
+
+//@备注 设置深/浅主题 (§8 轨道配色). 可在 AttachBtn 前后调用; AttachBtn 前调用会暂存并在附加时生效.
+//@参数 hBtn 按钮句柄
+//@参数 theme 主题
+//@返回 成功 TRUE
+//@别名  置主题()
+	static BOOL SetTheme(HELE hBtn, xuitool_theme_ theme);
+
+//@备注 取主题.
+//@参数 hBtn 按钮句柄
+//@返回 主题枚举
+//@别名  取主题()
+	static xuitool_theme_ GetTheme(HELE hBtn);
+
+//@备注 进程退出前批量 Detach 所有已注册按钮.
+//@别名  清理()
+	static void Cleanup();
+
+	//@隐藏{
+	static void CALLBACK AnimItemCb(HXCGUI hAnimItem, float pos);
+	static int CALLBACK OnPaintC(HELE hBtn, HDRAW hDraw, BOOL* pbHandled);
+	static int CALLBACK OnPaintEndC(HELE hBtn, HDRAW hDraw, BOOL* pbHandled);
+	static int CALLBACK OnMouseHoverC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
+	static int CALLBACK OnMouseLeaveC(HELE hBtn, BOOL* pbHandled);
+	static int CALLBACK OnLButtonDownC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
+	static int CALLBACK OnLButtonUpC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
+	static int CALLBACK OnBnClickC(HELE hBtn, BOOL* pbHandled);
+	static int CALLBACK OnButtonCheckC(HELE hBtn, BOOL bCheck, BOOL* pbHandled);
+	static int CALLBACK OnDestroyC(HELE hBtn, BOOL* pbHandled);
 	//@隐藏}
 };
 //@分组}

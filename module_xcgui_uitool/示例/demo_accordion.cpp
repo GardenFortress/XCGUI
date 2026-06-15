@@ -89,9 +89,10 @@ static HELE CreatePaymentPanel()
 		XWidget_LayoutItem_SetWidth(hRow, layout_size_fill, 0);
 		XWidget_LayoutItem_SetHeight(hRow, layout_size_auto, 0);
 
-		HELE hEdit = XEdit_Create(0, 0, 260, 32, L"you@store.com", hRow);
+		HELE hEdit = XEdit_Create(0, 0, 260, 32, hRow);
 		if (hEdit){
 			XUI_EnableCSS(hEdit, FALSE);
+			XEdit_SetText(hEdit, L"you@store.com");
 			XWidget_LayoutItem_SetWidth(hEdit, layout_size_weight, 1);
 			XWidget_LayoutItem_SetHeight(hEdit, layout_size_fixed, 32);
 		}

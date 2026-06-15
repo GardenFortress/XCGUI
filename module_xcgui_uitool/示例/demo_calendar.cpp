@@ -41,7 +41,7 @@ static int WINAPI OnBtnSingleClick(HELE, BOOL*)
 
 	if (CXCalendarCard::PopupSingle(g_hWnd, &date, TRUE, xuitool_theme_auto, NULL, 10)){
 		CXText s = CXCalendarCard::FormatShortDate(date);
-		XEle_SetText(g_hBtnSingle, s.getPtr());
+		XBtn_SetText(g_hBtnSingle, s.getPtr());
 	}
 	return 0;
 }
@@ -60,7 +60,7 @@ static int WINAPI OnBtnDoubleClick(HELE, BOOL*)
 		CXText s2 = CXCalendarCard::FormatDateTime(end);
 		wchar_t buf[128];
 		swprintf_s(buf, L"%s ~ %s", s1.getPtr(), s2.getPtr());
-		XEle_SetText(g_hBtnDouble, buf);
+		XBtn_SetText(g_hBtnDouble, buf);
 	}
 	return 0;
 }
@@ -72,7 +72,7 @@ static int WINAPI OnBtnTodayClick(HELE, BOOL*)
 
 	if (CXCalendarCard::PopupSingle(g_hWnd, &date, TRUE, xuitool_theme_light, &maxDate, 8)){
 		CXText s = CXCalendarCard::FormatShortDate(date);
-		XEle_SetText(g_hBtnToday, s.getPtr());
+		XBtn_SetText(g_hBtnToday, s.getPtr());
 	}
 	return 0;
 }
