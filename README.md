@@ -49,6 +49,8 @@ XC_SetD2dTextAntialiasMode(2);            // 2 = 灰度抗锯齿
 
 ## 快速示例
 
+各模块完整用法见 [`module_xcgui_uitool/示例/`](./module_xcgui_uitool/示例/) 下对应 `demo_*.cpp`。
+
 ### CXImageEx
 
 ```cpp
@@ -78,25 +80,46 @@ pEdit->SetText(L"Hello 💰 世界 😀");
 
 ```cpp
 CXBlur* pBlur = new CXBlur();
-pBlur->AttachToWndEx(hWnd);               // Win10 1803+ DComp 路径; 不支持时退回 AttachToWnd
+pBlur->AttachToWndEx(hWnd, xblur_path_auto);   // Win10 1803+ DComp; 不支持时自动降级
 pBlur->SetTheme(xblur_theme_auto);
+// 关闭前: pBlur->Detach(); delete pBlur;
 ```
 
 ### CXShadow
 
 ```cpp
-CXShadow* pShadow = new CXShadow();
+CXShadow* pShadow = CXShadow::Create();
 pShadow->AttachToWnd(hWnd);
-pShadow->SetCornerRadius(8);
+pShadow->SetCornerRadius(10);
+pShadow->SetTheme(xshadow_theme_auto);
+// 关闭前: pShadow->Detach(); CXShadow::Destroy(pShadow);
 ```
 
-### CXTooltip / CXLoading / CXCalendarCard
+### CXTooltip
 
 ```cpp
 CXTooltip::AddEleTip(hBtn, L"保存当前文档");
+CXTooltip::SetType(hBtn, xtooltip_type_success);
+CXTooltip::SetTheme(hBtn, xuitool_theme_auto);
+```
+
+### CXLoading
+
+```cpp
 CXLoading::AttachEle(hPanel);
 CXLoading::SetStyle(hPanel, xloading_style_spinner);
-CXCalendarCard::PopupSingle(hWnd, &date, TRUE, xcalendar_theme_auto);
+CXLoading::SetTheme(hPanel, xuitool_theme_dark);
+CXLoading::Start(hPanel);
+```
+
+### CXCalendarCard
+
+```cpp
+xcalendar_datetime_ date = CXCalendarCard::GetToday();
+CXCalendarCard::SetBindEle(hBtn, 0, 4);
+if (CXCalendarCard::PopupSingle(hWnd, &date, TRUE, xuitool_theme_auto, NULL, 10)) {
+    // date 已更新
+}
 ```
 
 ### CXChatBubbleBox
@@ -108,6 +131,7 @@ pChat->SetInsertType(chat_insert_type_receiver);
 pChat->InsertBubbleBegin();
 pChat->InsertText(L"你好");
 pChat->InsertBubbleEnd();
+// 关闭前: pChat->DestroyChat(); delete pChat;
 ```
 
 ### CXAccordion
@@ -117,16 +141,17 @@ FAQ / 设置分组 / 引导清单用折叠面板，支持分组、图标、徽�
 ```cpp
 CXAccordion* pAcc = new CXAccordion();
 pAcc->Create(hWnd);
-pAcc->SetTheme(xuitool_theme_auto);
+pAcc->SetTheme(xuitool_theme_light);
+pAcc->SetExpandMode(xaccordion_expand_mode_single);
 int g = pAcc->AddGroup(L"常见问题");
 int item = pAcc->AddItem(g, L"如何开始使用?", xaccordion_content_text);
 pAcc->SetItemBodyText(item, L"创建账号后按引导完成基础设置即可。");
 pAcc->AdjustLayout();
-pAcc->ExpandItem(item, TRUE);
+pAcc->ExpandItem(item, FALSE);
 // 关闭前: pAcc->DestroyAccordion(); delete pAcc;
 ```
 
-完整 API 与事件示例见 [`module_xcgui_uitool/示例/demo_accordion.cpp`](./module_xcgui_uitool/示例/demo_accordion.cpp)。
+详见 [`demo_accordion.cpp`](./module_xcgui_uitool/示例/demo_accordion.cpp)。
 
 ### CXCardPanel
 
@@ -134,13 +159,16 @@ pAcc->ExpandItem(item, TRUE);
 
 ```cpp
 CXCardPanel* pPanel = new CXCardPanel();
-pPanel->Create(hWnd);
-pPanel->SetTheme(xuitool_theme_auto);
-int g = pPanel->AddGroup(L"通用");
-pPanel->AddGroupContentEle(g, hToggleRow);
-pPanel->AdjustLayout();
+if (pPanel->Create(hWnd)) {
+    pPanel->SetTheme(xuitool_theme_light);
+    int g = pPanel->AddGroup(L"系统设置");
+    pPanel->SetGroupContentEle(g, hToggleRow);   // 单内容; 多项连续添加用 AddGroupContentEle
+    pPanel->AdjustLayout();
+}
 // 关闭前: pPanel->DestroyCardPanel(); delete pPanel;
 ```
+
+详见 [`demo_cardpanel.cpp`](./module_xcgui_uitool/示例/demo_cardpanel.cpp)。
 
 ### CXSteps
 
@@ -148,14 +176,20 @@ pPanel->AdjustLayout();
 
 ```cpp
 CXSteps* pSteps = new CXSteps();
-pSteps->Create(hWnd);
-pSteps->SetTheme(xuitool_theme_dark);
-pSteps->SetOrientation(xsteps_orient_horizontal);
-pSteps->AddStep(L"Register");
-pSteps->AddStep(L"Choose plan");
-pSteps->SetCurrentStep(1);
-pSteps->AdjustLayout();
+if (pSteps->Create(hWnd)) {
+    pSteps->SetTheme(xuitool_theme_dark);
+    pSteps->SetOrientation(xsteps_orient_horizontal);
+    pSteps->SetContentOrder(xsteps_content_label_first);
+    pSteps->SetAnimEnabled(TRUE);
+    pSteps->AddStep(L"Register");
+    pSteps->AddStep(L"Choose plan");
+    pSteps->SetCurrentStep(1);
+    pSteps->AdjustLayout();
+}
+// 关闭前: pSteps->DestroySteps(); delete pSteps;
 ```
+
+详见 [`demo_steps.cpp`](./module_xcgui_uitool/示例/demo_steps.cpp)。
 
 ### CXColorPicker
 
@@ -163,9 +197,13 @@ pSteps->AdjustLayout();
 
 ```cpp
 xcolor_rgba_ color = { 255, 0, 0, 255 };
-CXColorPicker::SetBindEle(hBtn, 0, 4);
-CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto);
+CXColorPicker::SetBindEle(hBtn, 0, 6);
+if (CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto, 10, TRUE, xcolor_input_hex)) {
+    // color 已更新
+}
 ```
+
+详见 [`demo_colorpicker.cpp`](./module_xcgui_uitool/示例/demo_colorpicker.cpp)。
 
 ## 兼容性
 

@@ -408,6 +408,24 @@ void CXCardPanel::SetAccentColor(COLORREF c)
 	if (m_theme == xuitool_theme_custom) RefreshTheme();
 }
 
+COLORREF CXCardPanel::GetTextColor() const
+{
+	return m_pColors ? m_pColors->groupTitle : m_customText;
+}
+
+COLORREF CXCardPanel::GetBkColor() const
+{
+	return m_pColors ? m_pColors->cardBg : m_customBg;
+}
+
+COLORREF CXCardPanel::GetAccentColor() const
+{
+	_XUITool::ThemePalette base;
+	memset(&base, 0, sizeof(base));
+	_XUITool::ResolvePalette(m_theme, m_customText, m_customBg, m_customAccent, &base);
+	return base.accent;
+}
+
 void CXCardPanel::SetCornerRadius(int r)
 {
 	m_cornerRadius = r > 0 ? r : kCard_CornerRadius;

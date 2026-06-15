@@ -20,7 +20,6 @@ constexpr int kClr_HeaderH        = 28;
 constexpr int kClr_HeaderSepGap   = 4;
 constexpr int kClr_HeaderCloseRight = 12;
 constexpr int kClr_CloseIconSize  = 24;
-constexpr int kClr_ClearIconSize  = 16;
 constexpr BYTE kClr_InputBorderBlurA  = 38;   // 15%
 constexpr BYTE kClr_InputBorderHoverA = 38;   // 15%
 constexpr BYTE kClr_InputBorderFocusA = 38;   // 15% 描边
@@ -56,6 +55,10 @@ constexpr int kClr_InnerW         = kClr_ContentW - kClr_PadH * 2;
 constexpr int kClr_SwatchSize     = 28;
 constexpr int kClr_SwatchGap      = 8;
 constexpr int kClr_SwatchRound    = 4;
+constexpr int kClr_SwatchSelectedBorderWidth = 2;
+constexpr int kClr_SwatchSelectedRoundInset = 1;
+constexpr int kClr_SwatchNeutralMaxSpread = 28;
+constexpr int kClr_SwatchSimilarMaxDist = 48;
 constexpr int kClr_SvRound        = 4;
 constexpr int kClr_ThumbRadius  = 6;
 constexpr int kClr_ThumbStroke  = 2;
@@ -198,20 +201,18 @@ struct _XClr_Ctx
 	BOOL closing = FALSE;
 	BOOL updatingUI = FALSE;
 	BOOL enableAutoClose = TRUE;
-	int candidateHotIndex = -1;
-	int candidatePressIndex = -1;
+	int candidateSelectedIndex = -1;
+	BOOL candidateSuppressClick = FALSE;
 
 	BOOL comboDropOpen = FALSE;
 	HELE hComboDropList = NULL;
 	HELE comboDropListStyled = NULL;
 	HSVG hSvgClose = NULL;
-	HSVG hSvgCloseClear = NULL;
 	HSVG hSvgPip = NULL;
 	HSVG hSvgAdd = NULL;
 	HSVG hSvgComboDown = NULL;
 	HSVG hSvgComboUp = NULL;
 	HIMAGE hImgClose = NULL;
-	HIMAGE hImgCloseClear = NULL;
 	HIMAGE hImgPip = NULL;
 	HIMAGE hImgAdd = NULL;
 	HIMAGE hImgComboDown = NULL;
@@ -798,8 +799,6 @@ void _XClr_LoadIcons(_XClr_Ctx* ctx)
 	COLORREF spinColor = RGBA(0x99, 0x99, 0x99, 0xFF);
 
 	ctx->hImgClose = _XClr_LoadSvgIcon(kClrSvg_Close, kClr_CloseIconSize, light, iconColor, &ctx->hSvgClose);
-	ctx->hImgCloseClear = _XClr_LoadSvgIcon(kClrSvg_Close, kClr_ClearIconSize, FALSE,
-		RGBA(255, 255, 255, 255), &ctx->hSvgCloseClear);
 	ctx->hImgPip = _XClr_LoadSvgIcon(kClrSvg_Pip, 14, light, iconColor, &ctx->hSvgPip);
 	ctx->hImgAdd = _XClr_LoadSvgIcon(kClrSvg_Add, 16, light, iconColor, &ctx->hSvgAdd);
 	ctx->hImgComboDown = _XClr_LoadSvgIcon(kCalSvg_Down, 8, light, spinColor, &ctx->hSvgComboDown);
@@ -810,8 +809,7 @@ void _XClr_DestroyIcons(_XClr_Ctx* ctx)
 {
 	if (!ctx) return;
 	if (ctx->hImgClose){ XImage_Release(ctx->hImgClose); ctx->hImgClose = NULL; }
-	if (ctx->hImgCloseClear){ XImage_Release(ctx->hImgCloseClear); ctx->hImgCloseClear = NULL; }
-	if (ctx->hSvgCloseClear){ XSvg_Destroy(ctx->hSvgCloseClear); ctx->hSvgCloseClear = NULL; }
+	if (ctx->hSvgClose){ XSvg_Destroy(ctx->hSvgClose); ctx->hSvgClose = NULL; }
 	if (ctx->hImgPip){ XImage_Release(ctx->hImgPip); ctx->hImgPip = NULL; }
 	if (ctx->hImgAdd){ XImage_Release(ctx->hImgAdd); ctx->hImgAdd = NULL; }
 	if (ctx->hImgComboDown){ XImage_Release(ctx->hImgComboDown); ctx->hImgComboDown = NULL; }
@@ -885,10 +883,10 @@ BOOL _XClr_PointInUniformRoundRect(int x, int y, int w, int h, int r)
 	return _XClr_RoundRectCoverage(x, y, w, h, (float)r) >= 0.5f;
 }
 
-inline BYTE _XClr_ColorR(COLORREF c) { return (BYTE)((c >> 16) & 0xFF); }
-inline BYTE _XClr_ColorG(COLORREF c) { return (BYTE)((c >> 8) & 0xFF); }
-inline BYTE _XClr_ColorB(COLORREF c) { return (BYTE)(c & 0xFF); }
-inline BYTE _XClr_ColorA(COLORREF c) { return (BYTE)((c >> 24) & 0xFF); }
+inline BYTE _XClr_ColorR(COLORREF c) { return GetRValue(c); }
+inline BYTE _XClr_ColorG(COLORREF c) { return GetGValue(c); }
+inline BYTE _XClr_ColorB(COLORREF c) { return GetBValue(c); }
+inline BYTE _XClr_ColorA(COLORREF c) { return GetAValue(c); }
 
 COLORREF _XClr_BlendColor(COLORREF fg, COLORREF bg, float t)
 {
@@ -1019,6 +1017,82 @@ void _XClr_FillRoundRectColor(HDRAW hDraw, const RECT& rc, int roundR, COLORREF 
 	}
 }
 
+COLORREF _XClr_SwatchSelectedBorderDefault(BOOL lightTheme)
+{
+	return lightTheme ? RGBA(0x28, 0x28, 0x28, 255) : RGBA(0xF3, 0xF3, 0xF3, 255);
+}
+
+COLORREF _XClr_SwatchSelectedBorderAccent()
+{
+	return RGBA(0xFF, 0x8D, 0x1A, 255);
+}
+
+COLORREF _XClr_EffectiveSwatchRgb(const _XClr_Ctx* ctx, const xcolor_rgba_& color)
+{
+	if (!ctx) return _XClr_ToColorRef(color.r, color.g, color.b, 255);
+	BYTE alpha = ctx->showAlpha ? color.a : (BYTE)255;
+	if (alpha >= 255) return _XClr_ToColorRef(color.r, color.g, color.b, 255);
+	COLORREF fg = _XClr_ToColorRef(color.r, color.g, color.b, 255);
+	float t = alpha / 255.f;
+	return _XClr_BlendColorRgb(fg, ctx->colors.wndBg, t);
+}
+
+BOOL _XClr_IsVisuallySimilarToBorder(COLORREF swatch, COLORREF border)
+{
+	const int sr = _XClr_ColorR(swatch), sg = _XClr_ColorG(swatch), sb = _XClr_ColorB(swatch);
+	const int lo = (std::min)({ sr, sg, sb });
+	const int hi = (std::max)({ sr, sg, sb });
+	if (hi - lo > kClr_SwatchNeutralMaxSpread)
+		return FALSE;
+	const int dr = sr - (int)_XClr_ColorR(border);
+	const int dg = sg - (int)_XClr_ColorG(border);
+	const int db = sb - (int)_XClr_ColorB(border);
+	const int distSq = dr * dr + dg * dg + db * db;
+	const int maxDistSq = kClr_SwatchSimilarMaxDist * kClr_SwatchSimilarMaxDist * 3;
+	return distSq <= maxDistSq;
+}
+
+COLORREF _XClr_SelectedSwatchBorderColor(const _XClr_Ctx* ctx, const xcolor_rgba_& swatch)
+{
+	if (!ctx) return _XClr_SwatchSelectedBorderDefault(FALSE);
+	const BOOL lightTheme = _XUITool::IsLightTheme(ctx->theme);
+	COLORREF primary = _XClr_SwatchSelectedBorderDefault(lightTheme);
+	COLORREF effective = _XClr_EffectiveSwatchRgb(ctx, swatch);
+	if (_XClr_IsVisuallySimilarToBorder(effective, primary))
+		return _XClr_SwatchSelectedBorderAccent();
+	return primary;
+}
+
+void _XClr_DrawSelectedSwatchBorder(_XClr_Ctx* ctx, HDRAW hDraw, const RECT& rc, const xcolor_rgba_& swatch)
+{
+	if (!ctx || !hDraw) return;
+	const int w = kClr_SwatchSelectedBorderWidth;
+	const int inset = w / 2;
+	RECT stroke = rc;
+	stroke.left += inset;
+	stroke.top += inset;
+	stroke.right -= inset;
+	stroke.bottom -= inset;
+	int r = kClr_SwatchRound - inset;
+	if (r < 1) r = 1;
+	XDraw_SetBrushColor(hDraw, _XClr_SelectedSwatchBorderColor(ctx, swatch));
+	XDraw_SetLineWidth(hDraw, w);
+	XDraw_DrawRoundRectEx(hDraw, &stroke, r, r, r, r);
+	XDraw_SetLineWidth(hDraw, 1);
+}
+
+void _XClr_SetCandidateSelected(_XClr_Ctx* ctx, int index)
+{
+	if (!ctx) return;
+	if (index < -1 || index >= kClr_CandidateMax) return;
+	int old = ctx->candidateSelectedIndex;
+	if (old == index) return;
+	ctx->candidateSelectedIndex = index;
+	if (old >= 0 && old < kClr_CandidateMax && ctx->hCandidateSwatch[old])
+		XEle_Redraw(ctx->hCandidateSwatch[old], FALSE);
+	if (index >= 0 && index < kClr_CandidateMax && ctx->hCandidateSwatch[index])
+		XEle_Redraw(ctx->hCandidateSwatch[index], FALSE);
+}
 COLORREF _XClr_SoftBorderColor(const _XClr_Ctx* ctx)
 {
 	if (!ctx) return RGBA(128, 128, 128, 80);
@@ -1268,6 +1342,33 @@ void _XClr_SwatchRoundAngle(RECT& ra)
 	ra.bottom = kClr_SwatchRound;
 }
 
+void _XClr_PaintSelectedSwatchFill(_XClr_Ctx* ctx, HDRAW hDraw, const RECT& rc, const xcolor_rgba_& color)
+{
+	if (!ctx || !hDraw) return;
+	const int bgRound = kClr_SwatchRound + kClr_SwatchSelectedRoundInset;
+	RECT bgRoundAngle{ bgRound, bgRound, bgRound, bgRound };
+	_XClr_FillRoundRectGradientUniform(hDraw, rc, bgRoundAngle, ctx->colors.wndBg);
+
+	const int pad = kClr_SwatchSelectedRoundInset;
+	RECT fillRc = rc;
+	fillRc.left += pad;
+	fillRc.top += pad;
+	fillRc.right -= pad;
+	fillRc.bottom -= pad;
+	if (fillRc.right <= fillRc.left || fillRc.bottom <= fillRc.top) return;
+
+	RECT fillRound{ kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound };
+	BYTE alpha = ctx->showAlpha ? color.a : (BYTE)255;
+	if (ctx->showAlpha && color.a < 255){
+		_XClr_DrawCheckerRound(ctx, hDraw, fillRc, kClr_SwatchRound, ctx->colors.wndBg);
+		_XClr_FillRoundRectGradientUniform(hDraw, fillRc, fillRound,
+			_XClr_ToColorRef(color.r, color.g, color.b, color.a));
+	} else {
+		_XClr_FillRoundRectGradientUniform(hDraw, fillRc, fillRound,
+			_XClr_ToColorRef(color.r, color.g, color.b, alpha));
+	}
+}
+
 void _XClr_PaintColorBlock(_XClr_Ctx* ctx, HDRAW hDraw, const RECT& rc, const xcolor_rgba_& color,
 	int lt, int rt, int rb, int lb, BOOL drawBorder = TRUE)
 {
@@ -1345,20 +1446,6 @@ void _XClr_PaintCloseButton(_XClr_Ctx* ctx, HELE hEle, HDRAW hDraw)
 		_XClr_FillRoundRectGradientUniform(hDraw, rc, roundAngle, _XClr_CloseHoverFill(ctx, down));
 	}
 	if (ctx->hImgClose) _XClr_DrawCenterImage(hDraw, ctx->hImgClose, rc);
-}
-
-void _XClr_DrawClearMark(_XClr_Ctx* ctx, HDRAW hDraw, const RECT& rc)
-{
-	if (!ctx || !hDraw) return;
-	RECT overlay = rc;
-	overlay.left += 1;
-	overlay.top += 1;
-	overlay.right -= 1;
-	overlay.bottom -= 1;
-	XDraw_SetBrushColor(hDraw, _XUITool::WithAlpha(RGBA(0, 0, 0, 255), 72));
-	XDraw_FillRect(hDraw, &overlay);
-	if (ctx->hImgCloseClear)
-		_XClr_DrawCenterImage(hDraw, ctx->hImgCloseClear, rc);
 }
 
 void _XClr_DrawThumb(HDRAW hDraw, int cx, int cy)
@@ -1486,10 +1573,14 @@ void _XClr_PaintSwatch(_XClr_Ctx* ctx, HELE hEle, HDRAW hDraw, int index)
 	RECT rc{};
 	XEle_GetClientRect(hEle, &rc);
 	if (index < g.candidateCount){
-		_XClr_PaintColorBlock(ctx, hDraw, rc, g.candidates[index],
-			kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound);
-		if (index == ctx->candidateHotIndex || index == ctx->candidatePressIndex)
-			_XClr_DrawClearMark(ctx, hDraw, rc);
+		const BOOL selected = (index == ctx->candidateSelectedIndex);
+		if (selected){
+			_XClr_PaintSelectedSwatchFill(ctx, hDraw, rc, g.candidates[index]);
+			_XClr_DrawSelectedSwatchBorder(ctx, hDraw, rc, g.candidates[index]);
+		} else {
+			_XClr_PaintColorBlock(ctx, hDraw, rc, g.candidates[index],
+				kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound, kClr_SwatchRound, TRUE);
+		}
 	} else {
 		RECT roundAngle{};
 		_XClr_SwatchRoundAngle(roundAngle);
@@ -1595,10 +1686,9 @@ int CALLBACK _XClr_OnPickerMove(HELE hEle, UINT nFlags, POINT* pPt, BOOL* pbHand
 int CALLBACK _XClr_OnPickerLUp(HELE hEle, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 int CALLBACK _XClr_OnPickerKillCapture(HELE hEle, BOOL* pbHandled);
 int CALLBACK _XClr_OnSwatchClick(HELE hEle, UINT nFlags, POINT* pPt, BOOL* pbHandled);
+int CALLBACK _XClr_OnSwatchDblClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
+int CALLBACK _XClr_OnSwatchRButtonUp(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnAddSlotClick(HELE hEle, UINT, POINT*, BOOL* pbHandled);
-int CALLBACK _XClr_OnCandidateMouseStay(HELE hEle, BOOL* pbHandled);
-int CALLBACK _XClr_OnCandidateMouseLeave(HELE hEle, BOOL* pbHandled);
-int CALLBACK _XClr_OnCandidateLDown(HELE hEle, UINT, POINT*, BOOL* pbHandled);
 int CALLBACK _XClr_OnWndMouseMove(HWINDOW hWnd, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditKillFocus(HELE hEle, BOOL* pbHandled);
 int CALLBACK _XClr_OnEditKeyDown(HELE hEle, int iChar, int, BOOL* pbHandled);
@@ -1960,11 +2050,26 @@ void _XClr_AddCandidate(_XClr_Ctx* ctx)
 {
 	if (!ctx || ctx->closing) return;
 	auto& g = ClrG();
+	if (ctx->candidateSelectedIndex >= 0 && ctx->candidateSelectedIndex < g.candidateCount){
+		g.candidates[ctx->candidateSelectedIndex] = ctx->rgba;
+		_XClr_RefreshCandidates(ctx);
+		return;
+	}
 	if (g.candidateCount < kClr_CandidateMax){
 		g.candidates[g.candidateCount++] = ctx->rgba;
 	} else {
 		g.candidates[kClr_CandidateMax - 1] = ctx->rgba;
 	}
+	_XClr_RefreshCandidates(ctx);
+}
+
+void _XClr_ReplaceSelectedCandidate(_XClr_Ctx* ctx)
+{
+	if (!ctx || ctx->closing) return;
+	auto& g = ClrG();
+	int idx = ctx->candidateSelectedIndex;
+	if (idx < 0 || idx >= g.candidateCount) return;
+	g.candidates[idx] = ctx->rgba;
 	_XClr_RefreshCandidates(ctx);
 }
 
@@ -1976,8 +2081,10 @@ void _XClr_ClearCandidate(_XClr_Ctx* ctx, int index)
 	for (int j = index; j < g.candidateCount - 1; ++j)
 		g.candidates[j] = g.candidates[j + 1];
 	g.candidateCount--;
-	ctx->candidateHotIndex = -1;
-	ctx->candidatePressIndex = -1;
+	if (ctx->candidateSelectedIndex == index)
+		ctx->candidateSelectedIndex = -1;
+	else if (ctx->candidateSelectedIndex > index)
+		ctx->candidateSelectedIndex--;
 	_XClr_RefreshCandidates(ctx);
 }
 
@@ -2148,6 +2255,7 @@ void _XClr_CommitEyedropper(_XClr_Ctx* ctx)
 {
 	if (!ctx) return;
 	_XClr_UpdatePickPreviewOnCommit(ctx);
+	_XClr_ReplaceSelectedCandidate(ctx);
 	_XClr_Notify(ctx, xcolor_change_commit);
 	_XClr_StopEyedropper(FALSE);
 }
@@ -2397,60 +2505,46 @@ int CALLBACK _XClr_OnAddSlotClick(HELE hEle, UINT, POINT*, BOOL* pbHandled)
 	return 0;
 }
 
+int CALLBACK _XClr_OnSwatchClear(HELE hEle, BOOL* pbHandled)
+{
+	if (pbHandled) *pbHandled = TRUE;
+	_XClr_Ctx* ctx = _XClr_CtxFromEle(hEle);
+	if (!ctx || ctx->closing) return 0;
+	int idx = _XClr_SwatchIndexFromEle(ctx, hEle);
+	if (idx < 0 || idx >= ClrG().candidateCount) return 0;
+	ctx->candidateSuppressClick = TRUE;
+	_XClr_ClearCandidate(ctx, idx);
+	return 0;
+}
+
 int CALLBACK _XClr_OnSwatchClick(HELE hEle, UINT, POINT*, BOOL* pbHandled)
 {
 	if (pbHandled) *pbHandled = TRUE;
 	_XClr_Ctx* ctx = _XClr_CtxFromEle(hEle);
 	if (!ctx || ctx->closing) return 0;
+	if (ctx->candidateSuppressClick){
+		ctx->candidateSuppressClick = FALSE;
+		return 0;
+	}
 	int idx = _XClr_SwatchIndexFromEle(ctx, hEle);
 	if (idx < 0 || idx >= ClrG().candidateCount) return 0;
-	_XClr_ClearCandidate(ctx, idx);
-	ctx->candidatePressIndex = -1;
+	if (ctx->candidateSelectedIndex == idx){
+		_XClr_SetCandidateSelected(ctx, -1);
+		return 0;
+	}
+	_XClr_SetCandidateSelected(ctx, idx);
+	_XClr_ApplyPickColor(ctx, ClrG().candidates[idx]);
 	return 0;
 }
 
-int CALLBACK _XClr_OnCandidateMouseStay(HELE hEle, BOOL* pbHandled)
+int CALLBACK _XClr_OnSwatchDblClick(HELE hEle, UINT, POINT*, BOOL* pbHandled)
 {
-	if (pbHandled) *pbHandled = TRUE;
-	_XClr_Ctx* ctx = _XClr_CtxFromEle(hEle);
-	if (!ctx || ctx->closing) return 0;
-	int idx = _XClr_SwatchIndexFromEle(ctx, hEle);
-	if (idx < 0 || idx >= ClrG().candidateCount) return 0;
-	if (ctx->candidateHotIndex != idx){
-		ctx->candidateHotIndex = idx;
-		XEle_Redraw(hEle, FALSE);
-	}
-	return 0;
+	return _XClr_OnSwatchClear(hEle, pbHandled);
 }
 
-int CALLBACK _XClr_OnCandidateMouseLeave(HELE hEle, BOOL* pbHandled)
+int CALLBACK _XClr_OnSwatchRButtonUp(HELE hEle, UINT, POINT*, BOOL* pbHandled)
 {
-	if (pbHandled) *pbHandled = TRUE;
-	_XClr_Ctx* ctx = _XClr_CtxFromEle(hEle);
-	if (!ctx || ctx->closing) return 0;
-	int idx = _XClr_SwatchIndexFromEle(ctx, hEle);
-	if (idx < 0) return 0;
-	if (ctx->candidateHotIndex == idx){
-		ctx->candidateHotIndex = -1;
-		XEle_Redraw(hEle, FALSE);
-	}
-	if (ctx->candidatePressIndex == idx){
-		ctx->candidatePressIndex = -1;
-		XEle_Redraw(hEle, FALSE);
-	}
-	return 0;
-}
-
-int CALLBACK _XClr_OnCandidateLDown(HELE hEle, UINT, POINT*, BOOL* pbHandled)
-{
-	if (pbHandled) *pbHandled = TRUE;
-	_XClr_Ctx* ctx = _XClr_CtxFromEle(hEle);
-	if (!ctx || ctx->closing) return 0;
-	int idx = _XClr_SwatchIndexFromEle(ctx, hEle);
-	if (idx < 0 || idx >= ClrG().candidateCount) return 0;
-	ctx->candidatePressIndex = idx;
-	XEle_Redraw(hEle, FALSE);
-	return 0;
+	return _XClr_OnSwatchClear(hEle, pbHandled);
 }
 
 int CALLBACK _XClr_OnWndMouseMove(HWINDOW hWnd, UINT nFlags, POINT* pPt, BOOL* pbHandled)
@@ -2928,10 +3022,9 @@ HELE _XClr_CreateSwatchEle(_XClr_Ctx* ctx, int x, int y, int index)
 	HELE ele = _XClr_CreatePickerEle(ctx, x, y, kClr_SwatchSize, kClr_SwatchSize);
 	if (!ele) return NULL;
 	(void)index;
-	XEle_RegEventC1(ele, XE_MOUSESTAY, (void*)&_XClr_OnCandidateMouseStay);
-	XEle_RegEventC1(ele, XE_MOUSELEAVE, (void*)&_XClr_OnCandidateMouseLeave);
-	XEle_RegEventC1(ele, XE_LBUTTONDOWN, (void*)&_XClr_OnCandidateLDown);
 	XEle_RegEventC1(ele, XE_LBUTTONUP, (void*)&_XClr_OnSwatchClick);
+	XEle_RegEventC1(ele, XE_LBUTTONDBCLICK, (void*)&_XClr_OnSwatchDblClick);
+	XEle_RegEventC1(ele, XE_RBUTTONUP, (void*)&_XClr_OnSwatchRButtonUp);
 	return ele;
 }
 

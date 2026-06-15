@@ -251,7 +251,7 @@ inline COLORREF _XAcc_AlphaPct(BYTE r, BYTE g, BYTE b, int pct)
 }
 
 void _XAcc_ResolveTheme(xuitool_theme_ theme, COLORREF customText, COLORREF customBg,
-	COLORREF customAccent, _XAcc_ThemeColors* c)
+	COLORREF customAccent, COLORREF customBorder, _XAcc_ThemeColors* c)
 {
 	if (!c) return;
 	_XUITool::ThemePalette base;
@@ -295,6 +295,8 @@ void _XAcc_ResolveTheme(xuitool_theme_ theme, COLORREF customText, COLORREF cust
 	c->statusProgress    = RGBA(249, 115, 22, 255);
 	c->statusTodo        = light ? RGBA(209, 213, 219, 255) : _XUITool::WithAlpha(base.text, 80);
 	c->itemBorder        = light ? RGBA(235, 235, 235, 255) : RGBA(38, 38, 38, 255);
+	if (theme == xuitool_theme_custom)
+		c->itemBorder = customBorder;
 	c->itemFillExpanded  = light ? RGBA(0, 0, 0, 20) : RGBA(255, 255, 255, 26);
 	c->itemFillDisabled  = light ? RGBA(0, 0, 0, 13) : RGBA(255, 255, 255, 15);
 	c->titleDisabled     = _XUITool::WithAlpha(c->title, 128);
@@ -502,6 +504,7 @@ CXAccordion::CXAccordion()
 	, m_customText(_XUITool::kDarkText)
 	, m_customBg(_XUITool::kDarkBg)
 	, m_customAccent(_XUITool::kDarkAccent)
+	, m_customBorder(RGBA(38, 38, 38, 255))
 	, m_cornerRadius(kAcc_CornerRadius)
 	, m_expandMode(xaccordion_expand_mode_single)
 	, m_bAnimEnabled(TRUE)
@@ -535,7 +538,7 @@ CXAccordion::CXAccordion()
 	, m_hImgDefaultIcon(NULL)
 	, m_pColors(new _XAcc_ThemeColors())
 {
-	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_customBorder, m_pColors);
 }
 
 CXAccordion::~CXAccordion()
@@ -788,7 +791,7 @@ HELE CXAccordion::Create(HXCGUI hParent)
 
 	EnsureFonts();
 	_xacc_LoadSvgAssets();
-	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_customBorder, m_pColors);
 
 	EnableCanvas(TRUE);
 	EnableDrawBorder(FALSE);
@@ -969,6 +972,35 @@ void CXAccordion::SetAccentColor(COLORREF c)
 {
 	m_customAccent = c;
 	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+void CXAccordion::SetBorderColor(COLORREF c)
+{
+	m_customBorder = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXAccordion::GetTextColor() const
+{
+	return m_pColors ? m_pColors->title : m_customText;
+}
+
+COLORREF CXAccordion::GetBkColor() const
+{
+	return m_pColors ? m_pColors->cardBg : m_customBg;
+}
+
+COLORREF CXAccordion::GetAccentColor() const
+{
+	_XUITool::ThemePalette base;
+	memset(&base, 0, sizeof(base));
+	_XUITool::ResolvePalette(m_theme, m_customText, m_customBg, m_customAccent, &base);
+	return base.accent;
+}
+
+COLORREF CXAccordion::GetBorderColor() const
+{
+	return m_pColors ? m_pColors->itemBorder : m_customBorder;
 }
 
 void CXAccordion::SetCornerRadius(int r)
@@ -1935,7 +1967,7 @@ HELE CXAccordion::GetItemContentHost(int itemId) const
 
 void CXAccordion::RefreshTheme()
 {
-	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XAcc_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_customBorder, m_pColors);
 	_xacc_LoadSvgAssets();
 	for (auto& gkv : m_groups){
 		_XAcc_GroupState* g = gkv.second;

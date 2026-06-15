@@ -25,6 +25,17 @@ struct _XSteps_ThemeColors
 	COLORREF connectorDone;
 };
 
+struct _XSteps_CustomColors
+{
+	COLORREF activeText;
+	COLORREF inactiveText;
+	COLORREF activeFill;
+	COLORREF inactiveFill;
+	COLORREF activeLabelText;
+	COLORREF inactiveLabelText;
+	COLORREF inactiveConnector;
+};
+
 struct _XSteps_StepState
 {
 	int                  id            = 0;
@@ -121,12 +132,37 @@ void _XSteps_DestroyUi(HXCGUI h)
 
 inline void _XSteps_DrawImageEx(HDRAW hDraw, HIMAGE hImg, int x, int y, int w, int h)
 {
-	if (hDraw && hImg) XDraw_ImageEx(hDraw, hImg, x, y, w, h);
+	if (hDraw && _XSteps_IsValidImage(hImg)) XDraw_ImageEx(hDraw, hImg, x, y, w, h);
 }
 
 inline void _XSteps_DrawSvgEx(HDRAW hDraw, HSVG hSvg, int x, int y, int w, int h)
 {
-	if (hDraw && hSvg) XDraw_DrawSvgEx(hDraw, hSvg, x, y, w, h);
+	if (hDraw && _XSteps_IsValidSvg(hSvg)) XDraw_DrawSvgEx(hDraw, hSvg, x, y, w, h);
+}
+
+inline void _XSteps_PrepareLabelImage(HIMAGE hImg)
+{
+	if (_XSteps_IsValidImage(hImg))
+		XImage_SetDrawType(hImg, image_draw_type_fixed_ratio);
+}
+
+inline void _XSteps_PrepareLabelSvg(HSVG hSvg)
+{
+	if (_XSteps_IsValidSvg(hSvg))
+		XSvg_SetSize(hSvg, kSteps_LabelIconSize, kSteps_LabelIconSize);
+}
+
+inline void _XSteps_ApplyLabelSvgTint(HSVG hSvg, COLORREF color)
+{
+	if (_XSteps_IsValidSvg(hSvg))
+		XSvg_SetUserFillColor(hSvg, color, TRUE);
+}
+
+inline COLORREF _XSteps_LabelContentColor(const _XSteps_ThemeColors* c, xsteps_status_ status)
+{
+	if (!c) return RGBA(255, 255, 255, 255);
+	if (status == xsteps_status_wait) return c->labelWaitText;
+	return c->labelActiveText;
 }
 
 inline void _XSteps_HideLayoutFrame(HXCGUI h)
@@ -218,24 +254,33 @@ inline COLORREF _XSteps_BlendOnBg(COLORREF bg, COLORREF fg, BYTE fgWeight)
 	return RGBA(r, g, b, 255);
 }
 
-void _XSteps_ResolveTheme(xuitool_theme_ theme, COLORREF customText, COLORREF customBg,
-	COLORREF customAccent, _XSteps_ThemeColors* c)
+void _XSteps_ResolveTheme(xuitool_theme_ theme, const _XSteps_CustomColors& custom, _XSteps_ThemeColors* c)
 {
 	if (!c) return;
-	_XUITool::ThemePalette base;
-	memset(&base, 0, sizeof(base));
-	_XUITool::ResolvePalette(theme, customText, customBg, customAccent, &base);
 	BOOL light = _XUITool::IsLightTheme(theme);
 
+	if (theme == xuitool_theme_custom){
+		c->stepText = custom.activeText;
+		c->stepTextWait = custom.inactiveText;
+		c->accent = custom.activeFill;
+		c->connectorDone = custom.activeFill;
+		c->labelWaitBg = custom.inactiveFill;
+		c->labelActiveText = custom.activeLabelText;
+		c->labelWaitText = custom.inactiveLabelText;
+		c->connectorWait = custom.inactiveConnector;
+		return;
+	}
+
+	_XUITool::ThemePalette base;
+	memset(&base, 0, sizeof(base));
+	_XUITool::ResolvePalette(theme, _XUITool::kDarkText, _XUITool::kDarkBg,
+		RGBA(0x37, 0x7A, 0xF6, 255), &base);
+
 	c->accent = light ? RGBA(0x31, 0x75, 0xF6, 255) : RGBA(0x37, 0x7A, 0xF6, 255);
-	if (theme == xuitool_theme_custom)
-		c->accent = customAccent;
 	c->labelWaitBg = light ? RGBA(0xE5, 0xE7, 0xEB, 255) : _XSteps_BlendOnBg(base.bg, base.text, 30);
 	c->labelWaitText = light ? RGBA(0x6B, 0x72, 0x80, 255) : _XUITool::WithAlpha(base.text, 128);
 	c->labelActiveText = RGBA(255, 255, 255, 255);
 	c->stepText = base.text;
-	if (theme == xuitool_theme_custom)
-		c->stepText = customText;
 	c->stepTextWait = light ? RGBA(0x6B, 0x72, 0x80, 255) : _XSteps_BlendOnBg(base.bg, c->stepText, 153);
 	c->connectorWait = light ? RGBA(0xE5, 0xE7, 0xEB, 255) : _XUITool::WithAlpha(base.text, 38);
 	c->connectorDone = c->accent;
@@ -270,9 +315,13 @@ RECT _XSteps_CircleRectInClient(const RECT& rcClient)
 
 CXSteps::CXSteps()
 	: m_theme(xuitool_theme_auto)
-	, m_customText(_XUITool::kDarkText)
-	, m_customBg(_XUITool::kDarkBg)
-	, m_customAccent(RGBA(0x37, 0x7A, 0xF6, 255))
+	, m_customActiveText(_XUITool::kDarkText)
+	, m_customInactiveText(RGBA(0x7D, 0x7E, 0x7F, 255))
+	, m_customActiveFill(RGBA(0x37, 0x7A, 0xF6, 255))
+	, m_customInactiveFill(RGBA(0x3A, 0x3A, 0x3C, 255))
+	, m_customActiveLabelText(RGBA(255, 255, 255, 255))
+	, m_customInactiveLabelText(RGBA(0x7D, 0x7E, 0x7F, 255))
+	, m_customInactiveConnector(RGBA(0x5A, 0x5A, 0x5C, 255))
 	, m_orientation(xsteps_orient_horizontal)
 	, m_contentOrder(xsteps_content_label_first)
 	, m_currentStep(0)
@@ -298,7 +347,7 @@ CXSteps::CXSteps()
 	, m_hStepWrap(NULL)
 	, m_vertTextColW(kSteps_VTextColMinW)
 {
-	_XSteps_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XSteps_ResolveTheme(m_theme, _xsteps_PackCustomColors(), m_pColors);
 }
 
 CXSteps::~CXSteps()
@@ -666,7 +715,13 @@ void CXSteps::UpdateStepVisual(_XSteps_StepState* step)
 	int index = _xsteps_IndexOfStep(step->id);
 	xsteps_status_ st = _xsteps_ResolveStatus(step, index);
 	if (step->hStepText && XC_IsShape(step->hStepText)){
-		COLORREF tc = (st == xsteps_status_wait) ? m_pColors->stepTextWait : m_pColors->stepText;
+		COLORREF tc;
+		if (st == xsteps_status_wait)
+			tc = m_pColors->stepTextWait;
+		else if (st == xsteps_status_process)
+			tc = m_pColors->stepText;
+		else
+			tc = _XUITool::WithAlpha(m_pColors->stepText, 210);
 		XShapeText_SetTextColor(step->hStepText, tc);
 		XShape_AdjustLayout(step->hStepText);
 	}
@@ -676,7 +731,7 @@ void CXSteps::UpdateStepVisual(_XSteps_StepState* step)
 
 void CXSteps::RefreshTheme()
 {
-	_XSteps_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XSteps_ResolveTheme(m_theme, _xsteps_PackCustomColors(), m_pColors);
 	for (auto& kv : m_steps)
 		UpdateStepVisual(kv.second);
 	if (m_onThemeChanged) m_onThemeChanged(this);
@@ -757,35 +812,31 @@ void CXSteps::_xsteps_PaintLabelContent(HDRAW hDraw, _XSteps_StepState* step, in
 	int iconSize, ix, iy;
 	const wchar_t* numText;
 	wchar_t buf[16];
+	COLORREF iconColor;
 
 	if (!hDraw || !step) return;
 
+	iconSize = kSteps_LabelIconSize;
+	ix = rcCircle.left + (kSteps_LabelSize - iconSize) / 2;
+	iy = rcCircle.top + (kSteps_LabelSize - iconSize) / 2;
+	iconColor = _XSteps_LabelContentColor(m_pColors, status);
+
 	if (_XSteps_IsValidImage(step->hLabelIcon)){
-		iconSize = kSteps_LabelSize - 8;
-		ix = rcCircle.left + (kSteps_LabelSize - iconSize) / 2;
-		iy = rcCircle.top + (kSteps_LabelSize - iconSize) / 2;
 		_XSteps_DrawImageEx(hDraw, step->hLabelIcon, ix, iy, iconSize, iconSize);
 		return;
 	}
 	if (_XSteps_IsValidSvg(step->hLabelSvg)){
-		iconSize = kSteps_LabelSize - 8;
-		ix = rcCircle.left + (kSteps_LabelSize - iconSize) / 2;
-		iy = rcCircle.top + (kSteps_LabelSize - iconSize) / 2;
+		_XSteps_ApplyLabelSvgTint(step->hLabelSvg, iconColor);
 		_XSteps_DrawSvgEx(hDraw, step->hLabelSvg, ix, iy, iconSize, iconSize);
 		return;
 	}
 	if (m_bShowCompletedIcon && status == xsteps_status_finish){
 		if (_XSteps_IsValidImage(m_hCompletedIcon)){
-			iconSize = kSteps_LabelSize - 8;
-			ix = rcCircle.left + (kSteps_LabelSize - iconSize) / 2;
-			iy = rcCircle.top + (kSteps_LabelSize - iconSize) / 2;
 			_XSteps_DrawImageEx(hDraw, m_hCompletedIcon, ix, iy, iconSize, iconSize);
 			return;
 		}
 		if (_XSteps_IsValidSvg(m_hCompletedSvg)){
-			iconSize = kSteps_LabelSize - 8;
-			ix = rcCircle.left + (kSteps_LabelSize - iconSize) / 2;
-			iy = rcCircle.top + (kSteps_LabelSize - iconSize) / 2;
+			_XSteps_ApplyLabelSvgTint(m_hCompletedSvg, iconColor);
 			_XSteps_DrawSvgEx(hDraw, m_hCompletedSvg, ix, iy, iconSize, iconSize);
 			return;
 		}
@@ -800,10 +851,7 @@ void CXSteps::_xsteps_PaintLabelContent(HDRAW hDraw, _XSteps_StepState* step, in
 	swprintf_s(buf, 16, L"%d", index + 1);
 	numText = buf;
 	XDraw_SetFont(hDraw, m_hFontLabel);
-	if (status == xsteps_status_wait)
-		XDraw_SetBrushColor(hDraw, m_pColors->labelWaitText);
-	else
-		XDraw_SetBrushColor(hDraw, m_pColors->labelActiveText);
+	XDraw_SetBrushColor(hDraw, iconColor);
 	XDraw_SetTextAlign(hDraw, textAlignFlag_center | textAlignFlag_vcenter);
 	XDraw_DrawText(hDraw, numText, (int)wcslen(numText), (RECT*)&rcCircle);
 }
@@ -824,7 +872,7 @@ HELE CXSteps::Create(HXCGUI hParent)
 	XUI_EnableCSS(m_hEle, FALSE);
 
 	EnsureFonts();
-	_XSteps_ResolveTheme(m_theme, m_customText, m_customBg, m_customAccent, m_pColors);
+	_XSteps_ResolveTheme(m_theme, _xsteps_PackCustomColors(), m_pColors);
 
 	EnableDrawBorder(FALSE);
 	EnableDrawFocus(FALSE);
@@ -884,22 +932,124 @@ xuitool_theme_ CXSteps::GetTheme() const
 	return m_theme;
 }
 
+_XSteps_CustomColors CXSteps::_xsteps_PackCustomColors() const
+{
+	_XSteps_CustomColors cc{};
+	cc.activeText = m_customActiveText;
+	cc.inactiveText = m_customInactiveText;
+	cc.activeFill = m_customActiveFill;
+	cc.inactiveFill = m_customInactiveFill;
+	cc.activeLabelText = m_customActiveLabelText;
+	cc.inactiveLabelText = m_customInactiveLabelText;
+	cc.inactiveConnector = m_customInactiveConnector;
+	return cc;
+}
+
+void CXSteps::SetActiveTextColor(COLORREF c)
+{
+	m_customActiveText = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetActiveTextColor() const
+{
+	return m_pColors ? m_pColors->stepText : m_customActiveText;
+}
+
+void CXSteps::SetInactiveTextColor(COLORREF c)
+{
+	m_customInactiveText = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetInactiveTextColor() const
+{
+	return m_pColors ? m_pColors->stepTextWait : m_customInactiveText;
+}
+
+void CXSteps::SetActiveFillColor(COLORREF c)
+{
+	m_customActiveFill = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetActiveFillColor() const
+{
+	return m_pColors ? m_pColors->accent : m_customActiveFill;
+}
+
+void CXSteps::SetInactiveFillColor(COLORREF c)
+{
+	m_customInactiveFill = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetInactiveFillColor() const
+{
+	return m_pColors ? m_pColors->labelWaitBg : m_customInactiveFill;
+}
+
+void CXSteps::SetActiveLabelTextColor(COLORREF c)
+{
+	m_customActiveLabelText = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetActiveLabelTextColor() const
+{
+	return m_pColors ? m_pColors->labelActiveText : m_customActiveLabelText;
+}
+
+void CXSteps::SetInactiveLabelTextColor(COLORREF c)
+{
+	m_customInactiveLabelText = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetInactiveLabelTextColor() const
+{
+	return m_pColors ? m_pColors->labelWaitText : m_customInactiveLabelText;
+}
+
+void CXSteps::SetInactiveConnectorColor(COLORREF c)
+{
+	m_customInactiveConnector = c;
+	if (m_theme == xuitool_theme_custom) RefreshTheme();
+}
+
+COLORREF CXSteps::GetInactiveConnectorColor() const
+{
+	return m_pColors ? m_pColors->connectorWait : m_customInactiveConnector;
+}
+
 void CXSteps::SetTextColor(COLORREF c)
 {
-	m_customText = c;
-	if (m_theme == xuitool_theme_custom) RefreshTheme();
+	SetActiveTextColor(c);
+}
+
+COLORREF CXSteps::GetTextColor() const
+{
+	return GetActiveTextColor();
 }
 
 void CXSteps::SetBkColor(COLORREF c)
 {
-	m_customBg = c;
-	if (m_theme == xuitool_theme_custom) RefreshTheme();
+	SetInactiveFillColor(c);
+}
+
+COLORREF CXSteps::GetBkColor() const
+{
+	return GetInactiveFillColor();
 }
 
 void CXSteps::SetAccentColor(COLORREF c)
 {
-	m_customAccent = c;
-	if (m_theme == xuitool_theme_custom) RefreshTheme();
+	SetActiveFillColor(c);
+}
+
+COLORREF CXSteps::GetAccentColor() const
+{
+	return GetActiveFillColor();
 }
 
 void CXSteps::SetOrientation(xsteps_orientation_ orient)
@@ -1154,9 +1304,11 @@ BOOL CXSteps::SetStepLabelIcon(int stepId, HIMAGE hImg)
 {
 	_XSteps_StepState* step = FindStep(stepId);
 	if (!step) return FALSE;
+	if (hImg && !_XSteps_IsValidImage(hImg)) return FALSE;
 	_XSteps_ReleaseSvgHandle(step->hLabelSvg);
 	_XSteps_ReleaseImageHandle(step->hLabelIcon);
 	step->hLabelIcon = hImg;
+	_XSteps_PrepareLabelImage(step->hLabelIcon);
 	if (step->hStepLabel) XEle_Redraw(step->hStepLabel, FALSE);
 	return TRUE;
 }
@@ -1165,9 +1317,11 @@ BOOL CXSteps::SetStepLabelSvg(int stepId, HSVG hSvg)
 {
 	_XSteps_StepState* step = FindStep(stepId);
 	if (!step) return FALSE;
+	if (hSvg && !_XSteps_IsValidSvg(hSvg)) return FALSE;
 	_XSteps_ReleaseImageHandle(step->hLabelIcon);
 	_XSteps_ReleaseSvgHandle(step->hLabelSvg);
 	step->hLabelSvg = hSvg;
+	_XSteps_PrepareLabelSvg(step->hLabelSvg);
 	if (step->hStepLabel) XEle_Redraw(step->hStepLabel, FALSE);
 	return TRUE;
 }
@@ -1184,17 +1338,21 @@ BOOL CXSteps::ClearStepLabelIcon(int stepId)
 
 void CXSteps::SetCompletedIcon(HIMAGE hImg)
 {
+	if (hImg && !_XSteps_IsValidImage(hImg)) return;
 	_XSteps_ReleaseSvgHandle(m_hCompletedSvg);
 	_XSteps_ReleaseImageHandle(m_hCompletedIcon);
 	m_hCompletedIcon = hImg;
+	_XSteps_PrepareLabelImage(m_hCompletedIcon);
 	RefreshTheme();
 }
 
 void CXSteps::SetCompletedIconSvg(HSVG hSvg)
 {
+	if (hSvg && !_XSteps_IsValidSvg(hSvg)) return;
 	_XSteps_ReleaseImageHandle(m_hCompletedIcon);
 	_XSteps_ReleaseSvgHandle(m_hCompletedSvg);
 	m_hCompletedSvg = hSvg;
+	_XSteps_PrepareLabelSvg(m_hCompletedSvg);
 	RefreshTheme();
 }
 

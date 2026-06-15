@@ -7,6 +7,7 @@
 
 enum {
 	kSteps_LabelSize      = 28,
+	kSteps_LabelIconSize  = 20,   // kSteps_LabelSize - 8, 圆内图标/SVG 绘制尺寸
 	kSteps_TextH          = 28,
 	kSteps_TextFontPt     = 10,
 	kSteps_LabelFontPt    = 10,

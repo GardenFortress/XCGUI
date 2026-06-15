@@ -3774,17 +3774,41 @@ public:
 //@别名  取主题()
 	xuitool_theme_ GetTheme() const;
 
-//@备注 custom 模式文本色.
+//@备注 custom 模式文本色 (项标题 / 组标题).
 //@别名  置文本颜色()
 	void SetTextColor(COLORREF c);
 
-//@备注 custom 模式卡片背景色.
+//@备注 取当前生效的标题文本色 (按主题解析).
+//@返回 ARGB
+//@别名  取文本颜色()
+	COLORREF GetTextColor() const;
+
+//@备注 custom 模式卡片 / 项填充背景色.
 //@别名  置背景颜色()
 	void SetBkColor(COLORREF c);
 
-//@备注 custom 模式强调色.
+//@备注 取当前生效的卡片填充色 (按主题解析).
+//@返回 ARGB
+//@别名  取背景颜色()
+	COLORREF GetBkColor() const;
+
+//@备注 custom 模式强调色 (预留).
 //@别名  置强调颜色()
 	void SetAccentColor(COLORREF c);
+
+//@备注 取当前生效的强调色 (按主题解析).
+//@返回 ARGB
+//@别名  取强调颜色()
+	COLORREF GetAccentColor() const;
+
+//@备注 custom 模式项外壳描边色.
+//@别名  置边框颜色()
+	void SetBorderColor(COLORREF c);
+
+//@备注 取当前生效的项描边色 (按主题解析).
+//@返回 ARGB
+//@别名  取边框颜色()
+	COLORREF GetBorderColor() const;
 
 //@备注 卡片圆角, 默认 8.
 //@别名  置圆角()
@@ -4048,6 +4072,7 @@ public:
 	COLORREF m_customText;
 	COLORREF m_customBg;
 	COLORREF m_customAccent;
+	COLORREF m_customBorder;
 	int m_cornerRadius;
 	xaccordion_expand_mode_ m_expandMode;
 	BOOL m_bAnimEnabled;
@@ -4149,13 +4174,28 @@ public:
 //@别名  置文本颜色()
 	void SetTextColor(COLORREF c);
 
+//@备注 取当前生效的组标题文本色 (按主题解析).
+//@返回 ARGB
+//@别名  取文本颜色()
+	COLORREF GetTextColor() const;
+
 //@备注 custom 模式卡片背景色 (默认深 #262626 / 浅 #FFFFFF).
 //@别名  置背景颜色()
 	void SetBkColor(COLORREF c);
 
+//@备注 取当前生效的卡片填充色 (按主题解析).
+//@返回 ARGB
+//@别名  取背景颜色()
+	COLORREF GetBkColor() const;
+
 //@备注 custom 模式强调色 (预留).
 //@别名  置强调颜色()
 	void SetAccentColor(COLORREF c);
+
+//@备注 取当前生效的强调色 (按主题解析).
+//@返回 ARGB
+//@别名  取强调颜色()
+	COLORREF GetAccentColor() const;
 
 //@备注 卡片四角统一圆角, 默认 8.
 //@别名  置圆角()
@@ -4339,6 +4379,7 @@ typedef int (CALLBACK* xsteps_void_event)(CXSteps* pSteps);
 
 struct _XSteps_ThemeColors;
 struct _XSteps_StepState;
+struct _XSteps_CustomColors;
 
 //@分组{ 炫彩步骤条
 //@备注  继承: CXLayoutFrame, CXScrollView, CXEle, CXWidgetUI, CXObjectUI, CXBase
@@ -4381,17 +4422,95 @@ public:
 //@别名  取主题()
 	xuitool_theme_ GetTheme() const;
 
-//@备注 custom 模式步骤文本色.
+//@备注 custom 模式激活步骤说明文本色 (同 SetActiveTextColor).
 //@别名  置文本颜色()
 	void SetTextColor(COLORREF c);
 
-//@备注 custom 模式背景基色; 影响深色主题下圆底/等待文本的叠底预混合.
+//@备注 取激活步骤说明文本色 (同 GetActiveTextColor).
+//@返回 ARGB
+//@别名  取文本颜色()
+	COLORREF GetTextColor() const;
+
+//@备注 custom 模式未激活圆点填充色 (同 SetInactiveFillColor).
 //@别名  置背景颜色()
 	void SetBkColor(COLORREF c);
 
-//@备注 custom 模式强调色 (活动圆/已完成连接段).
+//@备注 取未激活圆点填充色 (同 GetInactiveFillColor).
+//@返回 ARGB
+//@别名  取背景颜色()
+	COLORREF GetBkColor() const;
+
+//@备注 custom 模式激活圆点/连接段填充色 (同 SetActiveFillColor).
 //@别名  置强调颜色()
 	void SetAccentColor(COLORREF c);
+
+//@备注 取激活圆点/连接段填充色 (同 GetActiveFillColor).
+//@返回 ARGB
+//@别名  取强调颜色()
+	COLORREF GetAccentColor() const;
+
+//@备注 custom 模式激活步骤说明文本色 (process / finish 主文本).
+//@别名  置激活文本颜色()
+	void SetActiveTextColor(COLORREF c);
+
+//@备注 取当前生效的激活步骤说明文本色.
+//@返回 ARGB
+//@别名  取激活文本颜色()
+	COLORREF GetActiveTextColor() const;
+
+//@备注 custom 模式未激活步骤说明文本色 (wait).
+//@别名  置未激活文本颜色()
+	void SetInactiveTextColor(COLORREF c);
+
+//@备注 取当前生效的未激活步骤说明文本色.
+//@返回 ARGB
+//@别名  取未激活文本颜色()
+	COLORREF GetInactiveTextColor() const;
+
+//@备注 custom 模式激活圆点填充色与已完成连接段色.
+//@别名  置激活填充颜色()
+	void SetActiveFillColor(COLORREF c);
+
+//@备注 取当前生效的激活圆点填充色.
+//@返回 ARGB
+//@别名  取激活填充颜色()
+	COLORREF GetActiveFillColor() const;
+
+//@备注 custom 模式未激活圆点填充色.
+//@别名  置未激活填充颜色()
+	void SetInactiveFillColor(COLORREF c);
+
+//@备注 取当前生效的未激活圆点填充色.
+//@返回 ARGB
+//@别名  取未激活填充颜色()
+	COLORREF GetInactiveFillColor() const;
+
+//@备注 custom 模式激活圆内数字/图标/SVG 着色.
+//@别名  置激活标签文本颜色()
+	void SetActiveLabelTextColor(COLORREF c);
+
+//@备注 取当前生效的激活圆内内容色.
+//@返回 ARGB
+//@别名  取激活标签文本颜色()
+	COLORREF GetActiveLabelTextColor() const;
+
+//@备注 custom 模式未激活圆内数字/图标/SVG 着色.
+//@别名  置未激活标签文本颜色()
+	void SetInactiveLabelTextColor(COLORREF c);
+
+//@备注 取当前生效的未激活圆内内容色.
+//@返回 ARGB
+//@别名  取未激活标签文本颜色()
+	COLORREF GetInactiveLabelTextColor() const;
+
+//@备注 custom 模式未激活步骤间连接线段色 (connectorWait).
+//@别名  置未激活连接线颜色()
+	void SetInactiveConnectorColor(COLORREF c);
+
+//@备注 取当前生效的未激活连接线段色.
+//@返回 ARGB
+//@别名  取未激活连接线颜色()
+	COLORREF GetInactiveConnectorColor() const;
 
 	// ===== 布局 =====
 
@@ -4560,6 +4679,7 @@ public:
 	void UpdateStepVisual(_XSteps_StepState* step);
 	void RefreshTheme();
 	void _xsteps_InvalidConnectors();
+	_XSteps_CustomColors _xsteps_PackCustomColors() const;
 	void _xsteps_PaintLabelConnectors(HDRAW hDraw, const RECT& rcClient, int index) const;
 	void _xsteps_PaintLabelContent(HDRAW hDraw, _XSteps_StepState* step, int index,
 		const RECT& rcCircle, xsteps_status_ status);
@@ -4574,9 +4694,13 @@ public:
 	int OnAnimTimerImpl(HELE hEle, UINT nID, BOOL* pbHandled);
 
 	xuitool_theme_ m_theme;
-	COLORREF m_customText;
-	COLORREF m_customBg;
-	COLORREF m_customAccent;
+	COLORREF m_customActiveText;
+	COLORREF m_customInactiveText;
+	COLORREF m_customActiveFill;
+	COLORREF m_customInactiveFill;
+	COLORREF m_customActiveLabelText;
+	COLORREF m_customInactiveLabelText;
+	COLORREF m_customInactiveConnector;
 	xsteps_orientation_ m_orientation;
 	xsteps_content_order_ m_contentOrder;
 	int m_currentStep;

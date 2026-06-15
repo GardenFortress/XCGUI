@@ -301,7 +301,7 @@ void _XCal_ResolveTheme(xuitool_theme_ theme, _XCal_ThemeColors* c)
 	c->bkSubtle         = kBkSubtleDark;
 	c->bkInput          = kBkInputDark;
 	c->bkSpin           = kBkSpinDark;
-	c->separator        = _XUITool::WithAlpha(RGBA(255, 255, 255, 255), 20); // 8% 白
+	c->separator        = _XUITool::WithAlpha(RGBA(255, 255, 255, 255), 13); // ~5% 白
 }
 
 void _XCal_StyleButton(HELE hEle, const _XCal_ThemeColors& c, BOOL primary = FALSE, BOOL flatCancel = FALSE)
