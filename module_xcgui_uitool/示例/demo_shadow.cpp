@@ -19,7 +19,7 @@ static void SetupShadowStyle(CXShadow& shadow)
 	shadow.SetCornerRadius(10);
 	shadow.SetBorderColor(0x0F000000u);
 	shadow.SetBorderWidth(1.0f);
-	shadow.SetTheme(xshadow_theme_auto);
+	shadow.SetTheme(xuitool_theme_auto);
 
 	// 内圈填充: 默认随主题 (#202020 / #f3f3f3); 可自定义覆盖
 	shadow.SetInnerBgColor(RGB(0x2A, 0x2A, 0x2A));
@@ -50,9 +50,9 @@ static void DemoShadowControls(CXShadow& shadow)
 
 static void DemoShadowGlobalTheme()
 {
-	CXShadow::SetGlobalTheme(xshadow_theme_dark);
+	CXShadow::SetGlobalTheme(xuitool_theme_dark);
 	(void)CXShadow::GetGlobalTheme();
-	CXShadow::SetGlobalTheme(xshadow_theme_auto);
+	CXShadow::SetGlobalTheme(xuitool_theme_auto);
 }
 
 // =============================================================================

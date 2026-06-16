@@ -67,6 +67,7 @@ struct _XLoad_Entry
 	BOOL              eventsHooked   = FALSE;
 	// 字体 (per-host: 改字号无副作用, 多个 host 各自独立)
 	int               fontPt         = kLoad_TextFontPt;  // 默认 9
+	std::wstring      fontFace;                           // 空 = 微软雅黑 (AttachEle 可继承宿主)
 	HFONTX            hFont          = NULL;              // 懒创建, 改字号时销毁重建
 	// 用户面对的句柄 — 仅 AttachWnd 路径下非 NULL.
 	//   AttachWnd(hWnd) 时, 我们建子 HELE 作为真实绘制载体 (= registry key, = hHost),
@@ -91,11 +92,24 @@ _XLoad_Global& LG(){
 //   - SetFontSize 改字号 (先销毁旧的)
 void _XLoad_EnsureFont(_XLoad_Entry& e){
 	if (!e.hFont){
-		e.hFont = XFont_CreateEx(L"微软雅黑", e.fontPt, 0);
+		const wchar_t* face = e.fontFace.empty() ? L"微软雅黑" : e.fontFace.c_str();
+		e.hFont = XFont_CreateEx(face, e.fontPt, 0);
 	}
 }
 void _XLoad_DestroyFont(_XLoad_Entry& e){
 	if (e.hFont){ XFont_Destroy(e.hFont); e.hFont = NULL; }
+}
+
+// AttachEle 路径: 继承宿主元素字体族名与字号 (对齐 CXCheckAnim 的 XEle_GetFont 用法).
+static void _XLoad_TryAdoptEleFont(_XLoad_Entry& e, HELE hEle){
+	if (!XC_IsHELE((HXCGUI)hEle)) return;
+	HFONTX hHostFont = XEle_GetFont(hEle);
+	if (!hHostFont) return;
+	font_info_ fi = {};
+	XFont_GetFontInfo(hHostFont, &fi);
+	if (fi.nSize > 0) e.fontPt = fi.nSize;
+	if (fi.name[0]) e.fontFace = fi.name;
+	_XLoad_DestroyFont(e);
 }
 
 //============================================================================
@@ -811,6 +825,7 @@ BOOL CXLoading::AttachEle(HELE hEle)
 	XUI_EnableCSS(hEle, FALSE);
 	auto* p = _XLoad_GetOrCreate((HXCGUI)hEle);
 	if (!p) return FALSE;
+	_XLoad_TryAdoptEleFont(*p, hEle);
 	p->ownEle    = FALSE;
 	p->running   = TRUE;
 	p->startTick = ::GetTickCount();
@@ -891,6 +906,7 @@ BOOL CXLoading::AttachWnd(HWINDOW hWnd)
 		p->cornerLB     = oldConfig.cornerLB;
 		p->speed        = oldConfig.speed;
 		p->fontPt       = oldConfig.fontPt;
+		p->fontFace     = oldConfig.fontFace;
 		if (oldConfig.hFont) {
 			p->hFont = oldConfig.hFont;
 			oldConfig.hFont = NULL; // 防止旧字体句柄泄漏

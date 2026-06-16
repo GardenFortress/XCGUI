@@ -21,7 +21,7 @@ static void SetupBlurOwn(HXCGUI hParent)
 {
 	g_pBlurOwn = new CXBlur();
 	g_pBlurOwn->Create(20, 20, 200, 160, hParent);
-	g_pBlurOwn->SetTheme(xblur_theme_light);
+	g_pBlurOwn->SetTheme(xuitool_theme_light);
 	g_pBlurOwn->SetCornerRadius(12);
 	g_pBlurOwn->SetBorderColor(0x33000000u);
 	g_pBlurOwn->SetBorderWidth(1.0f);
@@ -34,15 +34,15 @@ static void SetupBlurAttachEle(HXCGUI hParent)
 
 	g_pBlurEle = new CXBlur();
 	g_pBlurEle->AttachToEle(g_hUserEle);
-	g_pBlurEle->SetTheme(xblur_theme_dark);
+	g_pBlurEle->SetTheme(xuitool_theme_dark);
 	g_pBlurEle->SetCornerRadiusEx(12, 12, 0, 0);
 }
 
 static void SetupBlurAttachWnd(HWINDOW hWnd)
 {
 	g_pBlurWnd = new CXBlur();
+	// 不显式 SetTheme — 依赖 BuildBlurDemo 开头 CXBlur::SetGlobalTheme (P0 回归).
 	g_pBlurWnd->AttachToWndEx(hWnd, xblur_path_auto);
-	g_pBlurWnd->SetTheme(xblur_theme_auto);
 	g_pBlurWnd->SetNoise(0.06f);
 	g_pBlurWnd->SetUniformBrightness(TRUE);
 	g_pBlurWnd->SetBlurOpacity(0.5f);
@@ -74,12 +74,11 @@ static void DemoBlurStaticApi(HWINDOW hWnd)
 {
 	(void)CXBlur::IsSystemAcrylicSupported();
 
-	CXBlur::SetGlobalTheme(xblur_theme_auto);
 	(void)CXBlur::GetGlobalTheme();
 
-	CXBlurThemeDefaults def = CXBlur::GetThemeDefault(xblur_theme_light);
+	CXBlurThemeDefaults def = CXBlur::GetThemeDefault(xuitool_theme_light);
 	def.noise = 0.08f;
-	CXBlur::SetThemeDefault(xblur_theme_light, def);
+	CXBlur::SetThemeDefault(xuitool_theme_light, def);
 
 	CXBlur::EnableNativeRoundedCorner(hWnd, xblur_corner_round);
 	// CXBlur::EnableNativeShadow(hWnd, TRUE);   // 纯 popup 窗才需要
@@ -97,6 +96,8 @@ void BuildBlurDemo(HXCGUI hWnd)
 	HWINDOW hw = (HWINDOW)hWnd;
 
 	CXBlur::ForceSystemTransparencyOn(FALSE);
+	// P0: 全局主题在 AttachToWndEx 之前设置; SetupBlurAttachWnd 不再调 SetTheme.
+	CXBlur::SetGlobalTheme(xuitool_theme_auto);
 	SetupBlurOwn(hw);
 	SetupBlurAttachEle(hw);
 	SetupBlurAttachWnd(hw);

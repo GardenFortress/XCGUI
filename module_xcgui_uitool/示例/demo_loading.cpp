@@ -7,9 +7,10 @@
 
 #include "module_xcgui_uitool.h"
 
-static HELE    g_hPanel     = NULL;
+static HELE    g_hPanel      = NULL;
 static HELE    g_hLoadingEle = NULL;
-static HWINDOW g_hWnd       = NULL;
+static HWINDOW g_hWnd        = NULL;
+static HFONTX  g_hPanelFont  = NULL;
 
 // =============================================================================
 // 1. 三种宿主形态: Create / AttachEle / AttachWnd
@@ -17,11 +18,12 @@ static HWINDOW g_hWnd       = NULL;
 
 static void SetupLoadingOnEle(HELE hHost)
 {
+	// AttachEle 会读取宿主 XEle_GetFont 的族名与 pt (对齐 CXCheckAnim 用法).
+	// 此处不显式 SetFontSize — 沿用 BuildLoadingDemo 在 attach 前设的 12pt.
 	CXLoading::AttachEle(hHost);
 	CXLoading::SetStyle(hHost, xloading_style_spinner);
 	CXLoading::SetSize(hHost, 48, 48);
 	CXLoading::SetText(hHost, L"加载中...");
-	CXLoading::SetFontSize(hHost, 10);
 	CXLoading::SetTheme(hHost, xuitool_theme_dark);
 	CXLoading::SetCornerRadius(hHost, 8);
 	CXLoading::SetSpeed(hHost, 1.0f);
@@ -76,6 +78,8 @@ static void DemoLoadingGet(HELE hHost)
 	int cx = 0, cy = 0;
 	CXLoading::GetSize(hHost, &cx, &cy);
 	(void)CXLoading::GetText(hHost);
+	// 继承宿主 12pt 后, 可用 SetFontSize 显式覆写.
+	CXLoading::SetFontSize(hHost, 10);
 	(void)CXLoading::GetFontSize(hHost);
 	(void)CXLoading::GetTheme(hHost);
 	(void)CXLoading::GetTextColor(hHost);
@@ -108,6 +112,10 @@ void BuildLoadingDemo(HXCGUI hWnd)
 	g_hPanel = XLayout_Create(20, 20, 360, 80, hWnd);
 	XEle_AddBkFill(g_hPanel, 0, RGB(0xF0, 0xF0, 0xF0));
 
+	// AttachEle 前设置宿主字体 — loading 文本沿用该族名/字号.
+	g_hPanelFont = XFont_CreateEx(L"Segoe UI", 12, 0);
+	if (g_hPanelFont) XEle_SetFont(g_hPanel, g_hPanelFont);
+
 	SetupLoadingOnEle(g_hPanel);
 	SetupLoadingOnWnd(g_hWnd);
 	SetupLoadingCreate(hWnd);
@@ -115,4 +123,22 @@ void BuildLoadingDemo(HXCGUI hWnd)
 	DemoLoadingStyles(g_hPanel);
 	DemoLoadingGet(g_hPanel);
 	// DemoLoadingDetach(g_hPanel);
+}
+
+void DestroyLoadingDemo()
+{
+	if (g_hPanel && XC_IsHELE((HXCGUI)g_hPanel)){
+		CXLoading::Detach(g_hPanel);
+	}
+	if (g_hWnd && XC_IsHWINDOW((HXCGUI)g_hWnd)){
+		CXLoading::Detach(g_hWnd);
+	}
+	if (g_hLoadingEle && XC_IsHELE((HXCGUI)g_hLoadingEle)){
+		CXLoading::Detach(g_hLoadingEle);
+		g_hLoadingEle = NULL;
+	}
+	if (g_hPanelFont){
+		XFont_Destroy(g_hPanelFont);
+		g_hPanelFont = NULL;
+	}
 }

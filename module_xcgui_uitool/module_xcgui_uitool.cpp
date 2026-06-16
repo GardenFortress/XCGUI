@@ -67,7 +67,7 @@ State* CreateState()
 	if (!p) return nullptr;
 	::InitializeSRWLock(&p->hostLock);
 	::InitializeSRWLock(&p->instLock);
-	p->globalTheme = xshadow_theme_custom;
+	p->globalTheme = xuitool_theme_custom;
 	return p;
 }
 

@@ -278,14 +278,14 @@ static bool XBlur_QuerySystemDarkMode(){
 	return dark;
 }
 
-static void XBlur_ResolveDcompEffectArgs(int themeIn, COLORREF userTint, float userBlurOpacity,
+static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTint, float userBlurOpacity,
                                           int uniformBrightnessIn, float userNoise,
                                           int& tintR, int& tintG, int& tintB, int& tintA,
                                           float& blurOpacity, float& saturation,
                                           BOOL& uniformBrightness, float& noiseAlphaPct){
 	bool dark;
-	if      (themeIn == xblur_theme_light) dark = false;
-	else if (themeIn == xblur_theme_dark)  dark = true;
+	if      (themeIn == xuitool_theme_light) dark = false;
+	else if (themeIn == xuitool_theme_dark)  dark = true;
 	else                                    dark = XBlur_QuerySystemDarkMode();
 
 	if (userTint != 0){
@@ -677,7 +677,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		BOOL     uniformBright   = TRUE;
 		float    userBlurOpacity = -1.0f;  // -1 = 未设
 		float    userNoise       = 0.06f;
-		int      userTheme       = xblur_theme_custom;
+		xuitool_theme_ userTheme = xuitool_theme_custom;
 		if (!s.subs.empty()){
 			HELE hFirst = *s.subs.begin();
 			if (XC_IsHELE((HXCGUI)hFirst)){
@@ -695,8 +695,8 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		// 用户显式 SetTheme(light/dark) → 强制对应 PoC 默认 (无视系统主题);
 		// 否则 (auto/custom) 跟随系统 AppsUseLightTheme.
 		bool dark;
-		if (userTheme == xblur_theme_light)      dark = false;
-		else if (userTheme == xblur_theme_dark)  dark = true;
+		if (userTheme == xuitool_theme_light)      dark = false;
+		else if (userTheme == xuitool_theme_dark)  dark = true;
 		else                                     dark = XBlur_QuerySystemDarkMode();
 		s.darkMode = dark;
 
@@ -826,7 +826,7 @@ namespace {
 // 全局活实例 + 全局主题 (CXBlur::SetGlobalTheme). attach/detach 维护.
 static std::mutex            g_blurInstancesMutex;
 static std::set<CXBlur*>     g_blurInstances;
-static std::atomic<int>      g_blurGlobalTheme{xblur_theme_custom};
+static std::atomic<int>      g_blurGlobalTheme{xuitool_theme_custom};
 
 // === 主题预设默认参数 (CXBlur::SetThemeDefault / GetThemeDefault) ===
 // 用户调好后可 SetThemeDefault 保存, 后续 SetTheme(light/dark) 自动用此值.
@@ -864,7 +864,7 @@ CXBlur::CXBlur(){
 	// 路径时该值是传给 DWM GradientColor 的 tint 强度. SetTheme(light/dark) 之后
 	// 改用主题 defaults.
 	m_tintColor.store(RGBA(252, 253, 254, 64));    // Win11 light acrylic
-	m_theme.store(xblur_theme_custom);
+	m_theme.store(xuitool_theme_custom);
 	m_noise.store(0.06f);                              // 6% 灰度噪点纹理
 	m_cornerTL.store(0);
 	m_cornerTR.store(0);
@@ -1007,7 +1007,7 @@ void CXBlur::ReapplyExEffects(){
 	float blurOpacity, saturation, noiseAlphaPct;
 	BOOL uniformBrightness;
 	XBlur_ResolveDcompEffectArgs(
-		m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
+		(xuitool_theme_)m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
 		m_uniformBrightness.load(), m_noise.load(),
 		tintR, tintG, tintB, tintA,
 		blurOpacity, saturation, uniformBrightness, noiseAlphaPct);
@@ -1042,7 +1042,7 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 	float blurOpacity, saturation, noiseAlphaPct;
 	BOOL uniformBright;
 	XBlur_ResolveDcompEffectArgs(
-		m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
+		(xuitool_theme_)m_theme.load(), m_tintColor.load(), GetBlurOpacity(),
 		m_uniformBrightness.load(), m_noise.load(),
 		tintR, tintG, tintB, tintA,
 		blurOpacity, saturation, uniformBright, noiseAlphaPct);
@@ -1078,9 +1078,8 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 		g_blurInstances.insert(this);
 	}
 	int gt = g_blurGlobalTheme.load();
-	if (gt != xblur_theme_custom){
-		m_theme.store(gt);
-		ReapplyExEffects();
+	if (gt != xuitool_theme_custom){
+		ApplyThemeInternal((xuitool_theme_)gt);
 	}
 	return TRUE;
 }
@@ -1175,12 +1174,11 @@ void CXBlur::AttachInternal(HELE hEle, bool owned){
 	}
 	// 如果用户在 attach 之前已 SetGlobalTheme(...), 默认采用之.
 	int gt = g_blurGlobalTheme.load();
-	if (gt != xblur_theme_custom){
-		m_theme.store(gt);
-		ApplyThemePreset(gt);
+	if (gt != xuitool_theme_custom){
+		ApplyThemeInternal((xuitool_theme_)gt);
+	} else {
+		RedrawSelf();
 	}
-
-	RedrawSelf();
 }
 
 void CXBlur::DetachInternal(){
@@ -1468,8 +1466,8 @@ int CXBlur::OnWndSizeImpl(HWINDOW /*hWnd*/, UINT /*nFlags*/, SIZE* pSize, BOOL* 
 int CXBlur::OnWndSettingChangeImpl(HWINDOW /*hWnd*/, UINT /*uFlags*/, void* /*pStr*/, BOOL* /*pbHandled*/){
 	// pStr 是变化类型字符串 (e.g. "ImmersiveColorSet"). 任何系统设置变化都重新
 	// 跑一遍 theme auto: 这里会按当前 AppsUseLightTheme 刷新 tint.
-	if (m_theme.load() == xblur_theme_auto){
-		ApplyThemePreset(xblur_theme_auto);
+	if (m_theme.load() == xuitool_theme_auto){
+		ApplyThemePreset(xuitool_theme_auto);
 	}
 
 #if XBLUR_ENABLE_DWM_TRANSIENT
@@ -1793,22 +1791,40 @@ BOOL CXBlur::IsSystemDarkMode(){
 	return XBlur_QuerySystemDarkMode() ? TRUE : FALSE;
 }
 
-void CXBlur::ApplyThemePreset(int theme){
-	if (theme == xblur_theme_auto){
-		ApplyThemePreset(IsSystemDarkMode() ? xblur_theme_dark : xblur_theme_light);
+void CXBlur::ApplyThemePresetTintNoise(xuitool_theme_ theme){
+	if (theme == xuitool_theme_auto){
+		ApplyThemePresetTintNoise(IsSystemDarkMode() ? xuitool_theme_dark : xuitool_theme_light);
 		return;
 	}
-	if (theme != xblur_theme_light && theme != xblur_theme_dark){
-		// custom / 其他 = 不应用任何预设, 保留用户已 Set... 的参数.
-		return;
-	}
-	CXBlurThemeDefaults d;
-	{
-		std::lock_guard<std::mutex> lk(g_themeDefaultsMutex);
-		d = (theme == xblur_theme_light) ? g_lightDefaults : g_darkDefaults;
-	}
+	if (theme != xuitool_theme_light && theme != xuitool_theme_dark) return;
+	CXBlurThemeDefaults d = GetThemeDefault(theme);
 	m_tintColor.store(d.tintColor);
-	m_noise    .store(d.noise);
+	m_noise.store(d.noise);
+}
+
+void CXBlur::ApplyThemeInternal(xuitool_theme_ theme){
+	m_theme.store((int)theme);
+	if (m_attachedExDcomp){
+		if (theme == xuitool_theme_light || theme == xuitool_theme_dark || theme == xuitool_theme_auto)
+			ApplyThemePresetTintNoise(theme);
+		ReapplyExEffects();
+		return;
+	}
+	if (theme == xuitool_theme_light || theme == xuitool_theme_dark || theme == xuitool_theme_auto)
+		ApplyThemePreset(theme);
+	else
+		RedrawSelf();
+}
+
+void CXBlur::ApplyThemePreset(xuitool_theme_ theme){
+	ApplyThemePresetTintNoise(theme);
+	xuitool_theme_ resolved = theme;
+	if (theme == xuitool_theme_auto){
+		resolved = IsSystemDarkMode() ? xuitool_theme_dark : xuitool_theme_light;
+	}
+	if (resolved != xuitool_theme_light && resolved != xuitool_theme_dark) return;
+
+	CXBlurThemeDefaults d = GetThemeDefault(resolved);
 
 #if XBLUR_ENABLE_DWM_TRANSIENT
 	// DWM_TRANSIENT 路径: 显式 light/dark 主题需写 DWMWA_USE_IMMERSIVE_DARK_MODE.
@@ -1818,7 +1834,7 @@ void CXBlur::ApplyThemePreset(int theme){
 		if (it != g_hostBlurMap.end() &&
 		    it->second.activePath == XBLUR_PATH_DWM_TRANSIENT)
 		{
-			bool wantDark = (theme == xblur_theme_dark);
+			bool wantDark = (resolved == xuitool_theme_dark);
 			if (wantDark != it->second.darkMode){
 				it->second.darkMode = wantDark;
 				BOOL bDark = wantDark ? TRUE : FALSE;
@@ -1854,18 +1870,18 @@ void CXBlur::ApplyThemePreset(int theme){
 // === SetThemeDefault / GetThemeDefault ===
 // 修改 light/dark 主题预设的默认参数. 后续 SetTheme(...) 用新值.
 // 不立即触发 redraw - 用户期望"先调好默认值再 SetTheme 应用".
-void CXBlur::SetThemeDefault(int theme, const CXBlurThemeDefaults& d){
-	if (theme != xblur_theme_light && theme != xblur_theme_dark) return;
+void CXBlur::SetThemeDefault(xuitool_theme_ theme, const CXBlurThemeDefaults& d){
+	if (theme != xuitool_theme_light && theme != xuitool_theme_dark) return;
 	std::lock_guard<std::mutex> lk(g_themeDefaultsMutex);
-	if (theme == xblur_theme_light) g_lightDefaults = d;
+	if (theme == xuitool_theme_light) g_lightDefaults = d;
 	else                            g_darkDefaults  = d;
 }
-CXBlurThemeDefaults CXBlur::GetThemeDefault(int theme){
+CXBlurThemeDefaults CXBlur::GetThemeDefault(xuitool_theme_ theme){
 	std::lock_guard<std::mutex> lk(g_themeDefaultsMutex);
 	// auto 按系统当前选 light/dark; 其他无效值返回 light 作为安全默认.
-	if (theme == xblur_theme_auto)
+	if (theme == xuitool_theme_auto)
 		return IsSystemDarkMode() ? g_darkDefaults : g_lightDefaults;
-	return (theme == xblur_theme_dark) ? g_darkDefaults : g_lightDefaults;
+	return (theme == xuitool_theme_dark) ? g_darkDefaults : g_lightDefaults;
 }
 
 //============================================================================
@@ -1970,30 +1986,21 @@ float CXBlur::GetBlurOpacity() const {
 }
 
 // --- Theme ---
-void CXBlur::SetTheme(int theme){
-	m_theme.store(theme);
-	// AttachToWndEx 路径: 不调 ApplyThemePreset (那会覆盖 m_tintColor=ACCENT 校准值,
-	// 跟我们 Ex 路径的 PoC 校准 RGB 冲突). 直接刷 dcomp effect chain — Ex 路径主题
-	// 默认靠 m_theme 判定 dark/light, m_tintColor=0 时取 PoC RGB.
-	if (m_attachedExDcomp){
-		ReapplyExEffects();
-		return;
-	}
-	ApplyThemePreset(theme);
-	RedrawSelf();
+void CXBlur::SetTheme(xuitool_theme_ theme){
+	ApplyThemeInternal(theme);
 }
-int  CXBlur::GetTheme() const { return m_theme.load(); }
+xuitool_theme_ CXBlur::GetTheme() const { return (xuitool_theme_)m_theme.load(); }
 
 // SetGlobalTheme 实现: 同步到所有活实例 + 写入全局默认 (供后创建的实例读).
-void CXBlur::SetGlobalTheme(int theme){
-	g_blurGlobalTheme.store(theme);
+void CXBlur::SetGlobalTheme(xuitool_theme_ theme){
+	g_blurGlobalTheme.store((int)theme);
 	std::lock_guard<std::mutex> lk(g_blurInstancesMutex);
 	for (CXBlur* p : g_blurInstances){
 		if (p) p->SetTheme(theme);
 	}
 }
-int CXBlur::GetGlobalTheme(){
-	return g_blurGlobalTheme.load();
+xuitool_theme_ CXBlur::GetGlobalTheme(){
+	return (xuitool_theme_)g_blurGlobalTheme.load();
 }
 
 void  CXBlur::SetNoise(float a){

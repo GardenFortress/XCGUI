@@ -11,6 +11,8 @@
 
 旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
+`module_xcgui_uitool` 内 **CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim** 共用 `xuitool_theme_`（深/浅/自定义/跟随系统）；旧 `xshadow_theme_*`、`xblur_theme_*` 已移除。
+
 详细 API 见各 `.h` 文件中的 `//@别名` 注释；`module_xcgui_uitool/示例/` 提供完整 demo。
 
 ## 环境要求
@@ -81,7 +83,7 @@ pEdit->SetText(L"Hello 💰 世界 😀");
 ```cpp
 CXBlur* pBlur = new CXBlur();
 pBlur->AttachToWndEx(hWnd, xblur_path_auto);   // Win10 1803+ DComp; 不支持时自动降级
-pBlur->SetTheme(xblur_theme_auto);
+pBlur->SetTheme(xuitool_theme_auto);
 // 关闭前: pBlur->Detach(); delete pBlur;
 ```
 
@@ -91,7 +93,7 @@ pBlur->SetTheme(xblur_theme_auto);
 CXShadow* pShadow = CXShadow::Create();
 pShadow->AttachToWnd(hWnd);
 pShadow->SetCornerRadius(10);
-pShadow->SetTheme(xshadow_theme_auto);
+pShadow->SetTheme(xuitool_theme_auto);
 // 关闭前: pShadow->Detach(); CXShadow::Destroy(pShadow);
 ```
 
@@ -106,7 +108,7 @@ CXTooltip::SetTheme(hBtn, xuitool_theme_auto);
 ### CXLoading
 
 ```cpp
-CXLoading::AttachEle(hPanel);
+CXLoading::AttachEle(hPanel);              // AttachEle 自动继承宿主元素字体族名与字号
 CXLoading::SetStyle(hPanel, xloading_style_spinner);
 CXLoading::SetTheme(hPanel, xuitool_theme_dark);
 CXLoading::Start(hPanel);

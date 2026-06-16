@@ -37,16 +37,6 @@ static inline BYTE GetRGBA_A(COLORREF c){ return (BYTE)(((c) >> 24) & 0xFF); }
 
 namespace {
 
-static xuitool_theme_ _CXShadow_ToUitoolTheme(int theme)
-{
-    switch (theme){
-    case xshadow_theme_light: return xuitool_theme_light;
-    case xshadow_theme_dark:  return xuitool_theme_dark;
-    case xshadow_theme_auto:  return xuitool_theme_auto;
-    default:                  return xuitool_theme_custom;
-    }
-}
-
 static COLORREF _CXShadow_ThemeBorderColor(xuitool_theme_ eff)
 {
     if (eff == xuitool_theme_light)
@@ -156,14 +146,14 @@ BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
     if (m_isMaximized) ClearPadding();   // 最大化起始 → 去 padding
 
     // 6) 主题: 优先 adopt 用户设的全局主题 (CXShadow::SetGlobalTheme), 否则用 m_theme
-    //    默认值 (xshadow_theme_auto). attach 完后 border / 内圈填充 等是 *已应用* 状态.
+    //    默认值 (xuitool_theme_auto). attach 完后 border / 内圈填充 等是 *已应用* 状态.
     int gt = CXShadowModule::GlobalTheme();
-    if (gt != xshadow_theme_custom){
+    if (gt != xuitool_theme_custom){
         m_theme.store(gt);
     }
     int t = m_theme.load();
-    if (t != xshadow_theme_custom){
-        ApplyThemePreset(t);
+    if (t != xuitool_theme_custom){
+        ApplyThemePreset((xuitool_theme_)t);
     }
 
     // 7) WS_MAXIMIZEBOX strip: 联合状态 m_snapDisabled || m_maxDisabled.
@@ -526,8 +516,8 @@ int CXShadow::OnWndProcImpl(HWINDOW hWnd, UINT msg,
     case WM_SETTINGCHANGE:
         // 系统主题切换 (浅/深 模式) 会派 WM_SETTINGCHANGE("ImmersiveColorSet").
         // 仅当用户主题为 auto 时, 自动跟随重新应用一遍. 其他主题保持不变.
-        if (m_theme.load() == xshadow_theme_auto){
-            ApplyThemePreset(xshadow_theme_auto);
+        if (m_theme.load() == xuitool_theme_auto){
+            ApplyThemePreset(xuitool_theme_auto);
             if (m_hAttachedWnd) ::XWnd_Redraw(m_hAttachedWnd, FALSE);
         }
         break;
@@ -640,22 +630,22 @@ float CXShadow::GetBorderWidth() const { return m_borderWidth.load(); }
 
 // (shadowInstances / shadowInstancesMutex / globalTheme 在文件顶部声明)
 
-void CXShadow::SetTheme(int theme){
+void CXShadow::SetTheme(xuitool_theme_ theme){
     // 接受 4 个合法值; 其他 (例如负数) 忽略.
-    if (theme != xshadow_theme_light && theme != xshadow_theme_dark
-        && theme != xshadow_theme_custom && theme != xshadow_theme_auto){
+    if (theme != xuitool_theme_light && theme != xuitool_theme_dark
+        && theme != xuitool_theme_custom && theme != xuitool_theme_auto){
         return;
     }
-    m_theme.store(theme);
-    if (theme != xshadow_theme_custom){
+    m_theme.store((int)theme);
+    if (theme != xuitool_theme_custom){
         ApplyThemePreset(theme);   // 内部解析 auto → light/dark
     }
     Invalidate();
 }
-int CXShadow::GetTheme() const { return m_theme.load(); }
+xuitool_theme_ CXShadow::GetTheme() const { return (xuitool_theme_)m_theme.load(); }
 
-void CXShadow::SetGlobalTheme(int theme){
-    CXShadowModule::GlobalTheme() = theme;
+void CXShadow::SetGlobalTheme(xuitool_theme_ theme){
+    CXShadowModule::GlobalTheme() = (int)theme;
     // 广播到所有活实例. 拷贝一份指针快照, 避免持锁回调用户代码.
     std::vector<CXShadow*> snapshot;
     {
@@ -667,13 +657,12 @@ void CXShadow::SetGlobalTheme(int theme){
         if (p) p->SetTheme(theme);
     }
 }
-int CXShadow::GetGlobalTheme(){
-    return CXShadowModule::GlobalTheme();
+xuitool_theme_ CXShadow::GetGlobalTheme(){
+    return (xuitool_theme_)CXShadowModule::GlobalTheme();
 }
 
-void CXShadow::ApplyThemePreset(int theme){
-    xuitool_theme_ uit = _CXShadow_ToUitoolTheme(theme);
-    xuitool_theme_ eff = _XUITool::EffectiveTheme(uit);
+void CXShadow::ApplyThemePreset(xuitool_theme_ theme){
+    xuitool_theme_ eff = _XUITool::EffectiveTheme(theme);
     m_borderColor.store(_CXShadow_ThemeBorderColor(eff));
     if (!m_innerBgUserSet.load()){
         m_innerBgColor.store(_CXShadow_DefaultInnerBg(eff));
@@ -692,7 +681,7 @@ void CXShadow::ClearInnerBgColor(){
     if (!m_innerBgUserSet.exchange(false)){
         return;   // 没自定义过, no-op
     }
-    xuitool_theme_ uit = _CXShadow_ToUitoolTheme(m_theme.load());
+    xuitool_theme_ uit = (xuitool_theme_)m_theme.load();
     xuitool_theme_ eff = _XUITool::EffectiveTheme(uit);
     COLORREF def = _CXShadow_DefaultInnerBg(eff);
     if (m_innerBgColor.exchange(def) != def) Invalidate();
@@ -1104,7 +1093,7 @@ void CXShadow::DrawNormalPaint(HDRAW hDraw, int cw, int ch){
         (float)rcInner.bottom
     };
     _XUITool::DrawDropShadow(hDraw, shadowBody, (float)cornerLog,
-        _CXShadow_ToUitoolTheme(m_theme.load()));
+        (xuitool_theme_)m_theme.load());
 
     COLORREF bg = m_innerBgColor.load();
     if (GetRGBA_A(bg) > 0){
@@ -1143,7 +1132,7 @@ void CXShadow::DrawNormalPaint(HDRAW hDraw, int cw, int ch){
 void CXShadow::DrawMaximizedPaint(HDRAW hDraw, int cw, int ch){
     COLORREF bg = m_innerBgColor.load();
     if (GetRGBA_A(bg) == 0){
-        xuitool_theme_ uit = _CXShadow_ToUitoolTheme(m_theme.load());
+        xuitool_theme_ uit = (xuitool_theme_)m_theme.load();
         bg = _CXShadow_DefaultInnerBg(_XUITool::EffectiveTheme(uit));
     }
     RECT rc = { 0, 0, cw, ch };

@@ -11,9 +11,9 @@
 //          XCGUI 别名工具会逐个识别. 不再用嵌套 class 形式 (扫描器不识别).
 //
 //          已实现的顶层类:
-//          模块内主题: CXTooltip / CXLoading / CXCalendarCard / CXAccordion / CXCardPanel /
-//            CXSteps / CXColorPicker / CXCheckAnim 共用 xuitool_theme_ 与 _XUITool 主题层
-//            (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
+//          模块内主题: CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXBlur /
+//            CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim 共用
+//            xuitool_theme_ 与 _XUITool 主题层 (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
 //          [1] CXTooltip — 鼠标悬停气泡提示
 //            - 全局静态注册表 + 共享气泡窗口, 同一时刻至多 1 个气泡显示.
 //            - 支持 普通 / 成功 / 信息 / 警告 / 错误 5 种语义 (后 4 个用内置 SVG 图标).
@@ -946,20 +946,6 @@ public:
 class CXShadow;
 //@隐藏}
 
-///<阴影主题预设 (CXShadow::SetTheme)
-//@别名 阴影主题
-enum xshadow_theme_
-{
-    //@别名 阴影主题_自定义
-    xshadow_theme_custom    = 0,
-    //@别名 阴影主题_浅色
-    xshadow_theme_light     = 1,
-    //@别名 阴影主题_深色
-    xshadow_theme_dark      = 2,
-    //@别名 阴影主题_跟随系统
-    xshadow_theme_auto      = 3,
-};
-
 //@分组{ 窗口阴影
 //@备注  Win11 风格的窗口外阴影 + 圆角 AA 描边 + 圆角内圈背景. 通过 AttachToWnd
 //       附加到一个 XCGUI 窗口接管其 paint, 不继承 CXEle, 也不创建额外 HWND.
@@ -1025,7 +1011,7 @@ public:
 
     // ===== 外晕 (halo) =====
 //@备注 外圈软阴影由 _XUITool::DrawDropShadow 绘制 (与 CXCalendarCard / CXTooltip
-//      同内核), 视觉强度与偏移由 xshadow_theme_* 决定, **不支持** 单独设置 halo
+//      同内核), 视觉强度与偏移由 xuitool_theme_* 决定, **不支持** 单独设置 halo
 //      颜色 / 模糊半径 / 扩散 / 偏移. 可调: SetTheme / SetGlobalTheme.
 
     // ===== 圆角描边 (Win11 风格 stroke) =====
@@ -1054,21 +1040,21 @@ public:
 //@备注 应用主题预设. light / dark / auto 同时调整外晕强度 (DrawDropShadow) 与
 //      描边色; auto 跟随系统 AppsUseLightTheme. 未自定义内圈填充时同步更新
 //      内圈默认色 (浅 #f3f3f3 / 深 #202020). 不改变圆角半径.
-//@参数 theme 见 xshadow_theme_*.
+//@参数 theme 见 xuitool_theme_*.
 //@别名  置主题()
-    void SetTheme(int theme);
+    void SetTheme(xuitool_theme_ theme);
 
 //@备注 取当前主题.
 //@别名  取主题()
-    int GetTheme() const;
+    xuitool_theme_ GetTheme() const;
 
 //@备注 全局主题: 设置后会同步到当前所有 CXShadow 实例, 之后新创建
 //      的实例默认也使用此主题. 适用于 "整个应用统一阴影风格" 场景.
 //      个别窗口仍可通过 SetTheme(...) 单独 override.
 //@别名  置全局主题()
-    static void SetGlobalTheme(int theme);
+    static void SetGlobalTheme(xuitool_theme_ theme);
 //@别名  取全局主题()
-    static int  GetGlobalTheme();
+    static xuitool_theme_ GetGlobalTheme();
 
     // ===== 内圈填充 =====
 //@备注 设置内圈填充色 (主窗内容区圆角矩形背景). 本类接管 WM_PAINT 后由本类绘制
@@ -1269,11 +1255,11 @@ private:
 
     // ===== 视觉参数 (逻辑像素 @ 96 DPI) =====
     //
-    // halo: DrawDropShadow + xshadow_theme_* (固定 kShadowMargin, 不可 per-instance 定制).
+    // halo: DrawDropShadow + xuitool_theme_* (固定 kShadowMargin, 不可 per-instance 定制).
     std::atomic<int>      m_cornerRadius  {8};
     std::atomic<COLORREF> m_borderColor   {0x0F000000u};   // ApplyThemePreset 覆盖
     std::atomic<float>    m_borderWidth   {1.0f};
-    std::atomic<int>      m_theme         {xshadow_theme_auto};   // 默认跟随系统
+    std::atomic<int>      m_theme         {xuitool_theme_auto};   // 默认跟随系统
 
     // 内圈填充. m_innerBgUserSet=true → m_innerBgColor; false → #202020 / #f3f3f3.
     std::atomic<COLORREF> m_innerBgColor  {0xFF202020u};   // 深 #202020, Attach 时按主题刷新
@@ -1341,7 +1327,7 @@ private:
 
     // ComputeNcHitTest 已上移到 public 区 (subclass proc 在 namespace 里调用).
 
-    void ApplyThemePreset(int theme);   // 同时计算 inner bg 默认色 (若用户未自定义)
+    void ApplyThemePreset(xuitool_theme_ theme);   // 同时计算 inner bg 默认色 (若用户未自定义)
     static BOOL IsSystemDarkMode();
 
     //@隐藏}
@@ -2358,20 +2344,6 @@ private:
 class CXBlur;
 //@隐藏}
 
-///模糊效果主题预设 (CXBlur::SetTheme)
-//@别名 模糊主题
-enum xblur_theme_
-{
-	//@别名 模糊主题_自定义
-	xblur_theme_custom    = 0,
-	//@别名 模糊主题_浅色
-	xblur_theme_light     = 1,
-	//@别名 模糊主题_深色
-	xblur_theme_dark      = 2,
-	//@别名 模糊主题_跟随系统
-	xblur_theme_auto      = 3,
-};
-
 ///AttachToWndEx 路径选择. auto = dcomp > dwm 自动按 OS / 能力降级.
 //@别名 模糊路径
 enum xblur_path_
@@ -2506,31 +2478,31 @@ public:
 //@别名  取叠加色()
 	COLORREF GetTintColor() const;
 
-//@备注 应用主题预设 (xblur_theme_*) 到当前实例.
+//@备注 应用主题预设 (xuitool_theme_*) 到当前实例.
 //@别名  置主题()
-	void SetTheme(int theme);
+	void SetTheme(xuitool_theme_ theme);
 //@别名  取主题()
-	int  GetTheme() const;
+	xuitool_theme_ GetTheme() const;
 
 //@备注 全局主题: 设置后会同步到当前所有 CXBlur 实例, 之后新创建的实例
 //      默认也使用此主题. 适用于"整个应用统一 acrylic 风格"的场景.
 //      个别 element 仍可通过 SetTheme(...) 单独 override.
 //@别名  置全局主题()
-	static void SetGlobalTheme(int theme);
+	static void SetGlobalTheme(xuitool_theme_ theme);
 //@别名  取全局主题()
-	static int  GetGlobalTheme();
+	static xuitool_theme_ GetGlobalTheme();
 
 //@备注 修改 light/dark 主题预设的默认参数. 后续 SetTheme(light/dark) 会用
 //      你设的值而非硬编码默认. 用于"调好参数后保存, 避免每次启动重设".
-//      theme 只接受 xblur_theme_light 或 xblur_theme_dark (其他忽略).
+//      theme 只接受 xuitool_theme_light 或 xuitool_theme_dark (其他忽略).
 //      auto 主题运行时根据系统设置选 light/dark 调用此值.
 //@别名  置主题默认参数()
-	static void SetThemeDefault(int theme, const CXBlurThemeDefaults& d);
+	static void SetThemeDefault(xuitool_theme_ theme, const CXBlurThemeDefaults& d);
 
 //@备注 读取 light/dark 主题预设当前默认参数. 配合 SetThemeDefault 可"读出
 //      → 改单字段 → 写回"实现细粒度调整.
 //@别名  取主题默认参数()
-	static CXBlurThemeDefaults GetThemeDefault(int theme);
+	static CXBlurThemeDefaults GetThemeDefault(xuitool_theme_ theme);
 
 //@备注 设置噪点强度. 增加 acrylic 砂质感, 缓解纯色块感.
 //      0 = 关闭, 1 = 满, 推荐 0 ~ 0.15. 默认 0.06.
@@ -2804,7 +2776,7 @@ private:
 
 	// ===== 模糊参数 (DWM 路径只控装饰层) =====
 	std::atomic<COLORREF> m_tintColor    {0};
-	std::atomic<int>      m_theme        {xblur_theme_custom};
+	std::atomic<int>      m_theme        {xuitool_theme_custom};
 	std::atomic<float>    m_noise        {0.06f};
 	// 仅 dcomp 路径生效: 是否锁亮度 (LuminosityBlend). TRUE=Win11 Start Menu 风,
 	// 不论桌面深浅窗口稳定 tint 亮度; FALSE=Win10 Aero 风, 亮度跟桌面起伏.
@@ -2861,7 +2833,9 @@ private:
 	void RefreshDpiScale();
 	void RedrawSelf();
 
-	void ApplyThemePreset(int theme);
+	void ApplyThemePresetTintNoise(xuitool_theme_ theme);
+	void ApplyThemeInternal(xuitool_theme_ theme);
+	void ApplyThemePreset(xuitool_theme_ theme);
 	static BOOL  IsSystemDarkMode();
 
 	// AttachToWndEx 路径下 Setter 改了参数后重刷 dcomp effect chain.
