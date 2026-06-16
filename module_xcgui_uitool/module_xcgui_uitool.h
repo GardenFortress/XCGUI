@@ -875,14 +875,14 @@ public:
 
 	// ===== 弹出 =====
 
-//@备注 设置下一次弹出的绑定元素位置 (元素左下角 + 偏移).
+//@备注 设置绑定元素位置 (元素左下角 + 偏移). 绑定会保持到下次 SetPopupPosition 或重新 SetBindEle.
 //@参数 hEle 绑定元素
 //@参数 offsetX 横向偏移
 //@参数 offsetY 纵向偏移
 //@别名  置绑定元素()
 	static void SetBindEle(HELE hEle, int offsetX = 0, int offsetY = 0);
 
-//@备注 设置下一次弹出的屏幕坐标.
+//@备注 设置下一次弹出的屏幕坐标 (一次性, 会覆盖当前绑定元素定位).
 //@参数 pt 屏幕坐标
 //@别名  置弹出位置()
 	static void SetPopupPosition(POINT pt);
@@ -891,6 +891,21 @@ public:
 //@参数 bEnable 是否启用失焦自动关闭
 //@别名  置启用自动关闭()
 	static void SetEnableAutoClose(BOOL bEnable);
+
+//@备注 设置下一次弹出是否模态阻塞父窗口. 默认 TRUE; FALSE 时父窗口仍可操作 (需配合失焦不关).
+//@参数 bEnable 是否模态阻塞
+//@别名  置启用模态()
+	static void SetEnableModal(BOOL bEnable);
+
+//@备注 设置下一次弹出是否允许拖动颜色选择器窗口 (标题区/整窗拖动).
+//@参数 bEnable 是否允许拖动
+//@别名  置启用拖动()
+	static void SetEnableDrag(BOOL bEnable);
+
+//@备注 设置下一次弹出是否置顶显示颜色选择器窗口.
+//@参数 bEnable 是否置顶
+//@别名  置启用置顶()
+	static void SetEnableTopmost(BOOL bEnable);
 
 //@备注 弹出颜色选择器. 确认返回 TRUE 并写回 *pColor; 取消返回 FALSE.
 //@参数 hParent 父窗口, 可为 NULL

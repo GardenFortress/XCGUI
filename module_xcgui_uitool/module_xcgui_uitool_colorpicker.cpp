@@ -201,6 +201,15 @@ struct _XClr_Ctx
 	BOOL closing = FALSE;
 	BOOL updatingUI = FALSE;
 	BOOL enableAutoClose = TRUE;
+	BOOL enableModal = TRUE;
+	BOOL enableDrag = FALSE;
+	BOOL enableTopmost = FALSE;
+	int modalResult = 0;
+	_XClr_PopupMode popupMode = _XClr_PopupMode_Default;
+	HELE bindEle = NULL;
+	int bindOffsetX = 0;
+	int bindOffsetY = 0;
+	POINT popupPt{};
 	int candidateSelectedIndex = -1;
 	BOOL candidateSuppressClick = FALSE;
 
@@ -230,6 +239,9 @@ struct _XClr_Global
 	int bindOffsetY = 0;
 	POINT popupPt{};
 	BOOL enableAutoClose = TRUE;
+	BOOL enableModal = TRUE;
+	BOOL enableDrag = FALSE;
+	BOOL enableTopmost = FALSE;
 	XCOLOR_PICKER_PROC_CHANGED onChanged = NULL;
 	void* onChangedUser = NULL;
 	xcolor_rgba_ candidates[kClr_CandidateMax]{};
@@ -330,6 +342,46 @@ void _XClr_SyncHslFromRgb(_XClr_Ctx* ctx)
 {
 	if (!ctx) return;
 	_XClr_RgbToHsl(ctx->rgba.r, ctx->rgba.g, ctx->rgba.b, &ctx->hue, &ctx->sat, &ctx->lum);
+}
+
+xcolor_rgba_ _XClr_NormalizeInitialColor(xcolor_rgba_ c, BOOL showAlpha)
+{
+	if (c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0){
+		c.r = 255;
+		c.g = 0;
+		c.b = 0;
+		c.a = 255;
+	}
+	if (!showAlpha && c.a == 0)
+		c.a = 255;
+	return c;
+}
+
+void _XClr_CopyPopupSettingsFromGlobal(_XClr_Ctx* ctx)
+{
+	if (!ctx) return;
+	auto& g = ClrG();
+	ctx->enableAutoClose = g.enableAutoClose;
+	ctx->enableModal = g.enableModal;
+	ctx->enableDrag = g.enableDrag;
+	ctx->enableTopmost = g.enableTopmost;
+	g.enableAutoClose = TRUE;
+	g.enableModal = TRUE;
+	g.enableDrag = FALSE;
+	g.enableTopmost = FALSE;
+
+	if (g.popupMode == _XClr_PopupMode_Pos){
+		ctx->popupMode = _XClr_PopupMode_Pos;
+		ctx->popupPt = g.popupPt;
+		g.popupMode = g.bindEle ? _XClr_PopupMode_Ele : _XClr_PopupMode_Default;
+		return;
+	}
+	if (g.popupMode == _XClr_PopupMode_Ele || g.bindEle){
+		ctx->popupMode = _XClr_PopupMode_Ele;
+		ctx->bindEle = g.bindEle;
+		ctx->bindOffsetX = g.bindOffsetX;
+		ctx->bindOffsetY = g.bindOffsetY;
+	}
 }
 
 // BkInfo 主题串 (文件作用域 static, 避免函数内超长字面量导致 IDE/旧编译器误解析)
@@ -1699,9 +1751,38 @@ void _XClr_EndModal(_XClr_Ctx* ctx, int result)
 	if (!ctx || ctx->closing) return;
 	_XClr_DismissComboDrop(ctx);
 	ctx->closing = TRUE;
+	ctx->modalResult = result;
 	if (ctx->hWnd && XC_IsHWINDOW((HXCGUI)ctx->hWnd)){
-		XModalWnd_EndModal(ctx->hWnd, result);
+		if (ctx->enableModal)
+			XModalWnd_EndModal(ctx->hWnd, result);
+		else
+			XWnd_ShowWindow(ctx->hWnd, SW_HIDE);
 	}
+}
+
+int _XClr_RunPopupLoop(_XClr_Ctx* ctx)
+{
+	if (!ctx) return kClr_ResultCancel;
+	if (ctx->enableModal)
+		return XModalWnd_DoModal(ctx->hWnd);
+
+	ctx->modalResult = kClr_ResultCancel;
+	ctx->closing = FALSE;
+	while (!ctx->closing){
+		MSG msg{};
+		while (::PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)){
+			if (msg.message == WM_QUIT){
+				::PostQuitMessage((int)msg.wParam);
+				ctx->closing = TRUE;
+				break;
+			}
+			::TranslateMessage(&msg);
+			::DispatchMessageW(&msg);
+		}
+		if (!ctx->closing)
+			::WaitMessage();
+	}
+	return ctx->modalResult;
 }
 
 BOOL _XClr_ParseHexString(const wchar_t* txt, BYTE* r, BYTE* g, BYTE* b, BYTE* a, BOOL allowAlpha)
@@ -2838,22 +2919,16 @@ int CALLBACK _XClr_OnPaintWindow(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled)
 void _XClr_ApplyPopupPosition(_XClr_Ctx* ctx)
 {
 	if (!ctx || !ctx->hWnd || !XC_IsHWINDOW((HXCGUI)ctx->hWnd)) return;
-	auto& g = ClrG();
-	if (g.popupMode == _XClr_PopupMode_Pos){
-		XWnd_SetPosition(ctx->hWnd, g.popupPt.x, g.popupPt.y);
+	if (ctx->popupMode == _XClr_PopupMode_Pos){
+		XWnd_SetPosition(ctx->hWnd, ctx->popupPt.x, ctx->popupPt.y);
 		XWnd_AdjustInScreen(ctx->hWnd, 0, FALSE);
-		g.popupMode = _XClr_PopupMode_Default;
 		return;
 	}
-	if (g.popupMode != _XClr_PopupMode_Ele) return;
+	if (ctx->popupMode != _XClr_PopupMode_Ele) return;
 
-	HELE hEle = g.bindEle;
-	int offX = g.bindOffsetX;
-	int offY = g.bindOffsetY;
-	g.popupMode = _XClr_PopupMode_Default;
-	g.bindEle = NULL;
-	g.bindOffsetX = 0;
-	g.bindOffsetY = 0;
+	HELE hEle = ctx->bindEle;
+	int offX = ctx->bindOffsetX;
+	int offY = ctx->bindOffsetY;
 	if (!hEle || !XC_IsHELE((HXCGUI)hEle)) return;
 
 	HWINDOW hEleWnd = XWidget_GetHWINDOW((HXCGUI)hEle);
@@ -3185,19 +3260,25 @@ int _XClr_CalcContentH(BOOL showAlpha)
 	return vl.actionY + kClr_ActionH + kClr_SepGap;
 }
 
-_XClr_Ctx* _XClr_CreateWindow(HWINDOW hParent, xuitool_theme_ theme, int cornerRadius, BOOL showAlpha)
+_XClr_Ctx* _XClr_CreateWindow(HWINDOW hParent, xuitool_theme_ theme, int cornerRadius, BOOL showAlpha,
+	const xcolor_rgba_* pInitialColor, xcolor_input_mode_ initialMode)
 {
 	_XClr_Ctx* ctx = new _XClr_Ctx();
 	if (!ctx) return NULL;
 	ctx->theme = theme;
 	ctx->showAlpha = showAlpha;
+	ctx->inputMode = initialMode;
 	ctx->hParent = hParent ? XWnd_GetHWND(hParent) : NULL;
 	ctx->cornerRadius = _XClr_ClampI(cornerRadius, 0, 32);
 	_XClr_ResolveTheme(theme, &ctx->colors);
+	_XClr_CopyPopupSettingsFromGlobal(ctx);
 
-	auto& g = ClrG();
-	ctx->enableAutoClose = g.enableAutoClose;
-	g.enableAutoClose = TRUE;
+	if (pInitialColor){
+		ctx->rgba = _XClr_NormalizeInitialColor(*pInitialColor, showAlpha);
+		ctx->pickPrevColor = ctx->rgba;
+		ctx->pickCurrColor = ctx->rgba;
+		_XClr_SyncHslFromRgb(ctx);
+	}
 
 	ctx->contentW = kClr_ContentW;
 	ctx->contentH = _XClr_CalcContentH(showAlpha);
@@ -3212,9 +3293,11 @@ _XClr_Ctx* _XClr_CreateWindow(HWINDOW hParent, xuitool_theme_ theme, int cornerR
 	ClrG().windows[ctx->hWnd] = ctx;
 	XWnd_SetTransparentType(ctx->hWnd, window_transparent_shaped);
 	XWnd_SetTransparentAlpha(ctx->hWnd, 255);
-	XWnd_EnableDragWindow(ctx->hWnd, FALSE);
+	XWnd_EnableDragWindow(ctx->hWnd, ctx->enableDrag);
 	XWnd_EnableDragBorder(ctx->hWnd, FALSE);
-	XWnd_EnableDragCaption(ctx->hWnd, FALSE);
+	XWnd_EnableDragCaption(ctx->hWnd, ctx->enableDrag);
+	if (ctx->enableTopmost)
+		XWnd_SetTop(ctx->hWnd, TRUE);
 	XWnd_EnableDrawBk(ctx->hWnd, TRUE);
 	XWnd_SetTextColor(ctx->hWnd, ctx->colors.text);
 	XWnd_ClearBkInfo(ctx->hWnd);
@@ -3304,21 +3387,16 @@ BOOL _XClr_Show(HWINDOW hParent, xcolor_rgba_* pColor, BOOL showAlpha,
 	if (ClrG().eyedropperCtx)
 		_XClr_StopEyedropper(FALSE);
 
-	_XClr_Ctx* ctx = _XClr_CreateWindow(hParent, theme, cornerRadius, showAlpha);
+	xcolor_rgba_ initial = _XClr_NormalizeInitialColor(*pColor, showAlpha);
+	_XClr_Ctx* ctx = _XClr_CreateWindow(hParent, theme, cornerRadius, showAlpha, &initial, initialMode);
 	if (!ctx) return FALSE;
 	ctx->liveNotify = liveNotify;
-	ctx->inputMode = initialMode;
-	ctx->rgba = *pColor;
-	if (ctx->rgba.a == 0 && !showAlpha) ctx->rgba.a = 255;
-	ctx->pickPrevColor = ctx->rgba;
-	ctx->pickCurrColor = ctx->rgba;
-	_XClr_SyncHslFromRgb(ctx);
 	_XClr_ApplyInputMode(ctx);
 	_XClr_RefreshAll(ctx, FALSE);
 
 	_XClr_ApplyPopupPosition(ctx);
 	XWnd_ShowWindow(ctx->hWnd, SW_SHOWNOACTIVATE);
-	int result = XModalWnd_DoModal(ctx->hWnd);
+	int result = _XClr_RunPopupLoop(ctx);
 	ctx->closing = TRUE;
 	if (ctx->eyedropperActive || ClrG().eyedropperCtx == ctx)
 		_XClr_StopEyedropper(FALSE);
@@ -3393,6 +3471,21 @@ void CXColorPicker::SetPopupPosition(POINT pt)
 void CXColorPicker::SetEnableAutoClose(BOOL bEnable)
 {
 	ClrG().enableAutoClose = bEnable;
+}
+
+void CXColorPicker::SetEnableModal(BOOL bEnable)
+{
+	ClrG().enableModal = bEnable;
+}
+
+void CXColorPicker::SetEnableDrag(BOOL bEnable)
+{
+	ClrG().enableDrag = bEnable;
+}
+
+void CXColorPicker::SetEnableTopmost(BOOL bEnable)
+{
+	ClrG().enableTopmost = bEnable;
 }
 
 void CXColorPicker::SetOnColorChanged(XCOLOR_PICKER_PROC_CHANGED proc, void* pUserData)

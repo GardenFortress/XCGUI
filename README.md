@@ -195,14 +195,20 @@ if (pSteps->Create(hWnd)) {
 
 ### CXColorPicker
 
-现代颜色选择器，支持 RGBA/HEX/HSL、吸管取色、实时预览与元素绑定。
+现代颜色选择器，支持 RGBA/HEX/HSL、吸管取色、实时预览与元素绑定；可选非模态弹出、拖动窗口与置顶。
 
 ```cpp
 xcolor_rgba_ color = { 255, 0, 0, 255 };
-CXColorPicker::SetBindEle(hBtn, 0, 6);
+CXColorPicker::SetBindEle(hBtn, 0, 6);              // 绑定保持到下次 SetPopupPosition 或重新 SetBindEle
+CXColorPicker::SetEnableModal(FALSE);               // 非模态，父窗口仍可操作
+CXColorPicker::SetEnableDrag(TRUE);                 // 允许拖动选择器窗口
+CXColorPicker::SetEnableTopmost(TRUE);              // 置顶显示
 if (CXColorPicker::Popup(hWnd, &color, TRUE, xuitool_theme_auto, 10, TRUE, xcolor_input_hex)) {
     // color 已更新
 }
+CXColorPicker::SetEnableModal(TRUE);                // 恢复默认
+CXColorPicker::SetEnableDrag(FALSE);
+CXColorPicker::SetEnableTopmost(FALSE);
 ```
 
 详见 [`demo_colorpicker.cpp`](./module_xcgui_uitool/示例/demo_colorpicker.cpp)。

@@ -99,12 +99,18 @@ static int WINAPI OnBtnNoAutoCloseClick(HELE, BOOL*)
 {
 	CXColorPicker::SetBindEle(g_hBtnNoAutoClose, 0, 6);
 	CXColorPicker::SetEnableAutoClose(FALSE);
+	CXColorPicker::SetEnableModal(FALSE);
+	CXColorPicker::SetEnableDrag(TRUE);
+	CXColorPicker::SetEnableTopmost(TRUE);
 	xcolor_rgba_ c = g_color;
 	if (CXColorPicker::Popup(g_hWnd, &c, TRUE, xuitool_theme_auto, 10, TRUE, xcolor_input_hex)){
 		g_color = c;
 		Demo_UpdatePreview();
 	}
 	CXColorPicker::SetEnableAutoClose(TRUE);
+	CXColorPicker::SetEnableModal(TRUE);
+	CXColorPicker::SetEnableDrag(FALSE);
+	CXColorPicker::SetEnableTopmost(FALSE);
 	return 0;
 }
 
