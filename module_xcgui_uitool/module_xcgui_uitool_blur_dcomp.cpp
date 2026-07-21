@@ -964,6 +964,16 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 {
 	HWND acrylicBackdrop = (HWND)dwRefData;
 	switch (msg){
+	case WM_SHOWWINDOW:
+		// acrylic 是 XCGUI 主窗的 owner。隐藏 owned 主窗不会自动隐藏 owner，
+		// 托盘模式因此会只留下空白亚克力背板；这里显式同步普通显示/隐藏。
+		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
+			if (wParam && !::IsIconic(hwnd))
+				::ShowWindow(acrylicBackdrop, SW_SHOWNA);
+			else
+				::ShowWindow(acrylicBackdrop, SW_HIDE);
+		}
+		break;
 	case WM_WINDOWPOSCHANGING: {
 		LRESULT r = ::DefSubclassProc(hwnd, msg, wParam, lParam);
 		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
@@ -1006,6 +1016,13 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 		break;
 	case WM_WINDOWPOSCHANGED:
 		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
+			WINDOWPOS* wp = (WINDOWPOS*)lParam;
+			// 部分框架路径只通过 WINDOWPOS 标志改变可见性，未必单独发送 WM_SHOWWINDOW。
+			if (wp && (wp->flags & SWP_HIDEWINDOW))
+				::ShowWindow(acrylicBackdrop, SW_HIDE);
+			else if (wp && (wp->flags & SWP_SHOWWINDOW) && !::IsIconic(hwnd))
+				::ShowWindow(acrylicBackdrop, SW_SHOWNA);
+
 			LONG_PTR exXcgui   = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
 			LONG_PTR exAcrylic = ::GetWindowLongPtrW(acrylicBackdrop, GWL_EXSTYLE);
 			bool xcguiTop   = (exXcgui   & WS_EX_TOPMOST) != 0;

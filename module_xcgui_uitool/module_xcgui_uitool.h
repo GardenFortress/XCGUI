@@ -1,8 +1,8 @@
 ﻿#ifndef  XCGUI_UITOOL_H
 #define  XCGUI_UITOOL_H
 //@模块名称  炫彩界面库UI工具集
-//@版本  1.0.0
-//@日期  2026-05-22
+//@版本  1.1.0
+//@日期  2026-07-21
 //@作者  未闻花名
 //@QQ    936599025
 //@依赖  module_xcgui_class.h
@@ -11,7 +11,7 @@
 //          XCGUI 别名工具会逐个识别. 不再用嵌套 class 形式 (扫描器不识别).
 //
 //          已实现的顶层类:
-//          模块内主题: CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXBlur /
+//          模块内主题: CXTooltip / CXNotify / CXLoading / CXCalendarCard / CXShadow / CXBlur /
 //            CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim 共用
 //            xuitool_theme_ 与 _XUITool 主题层 (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
 //          [1] CXTooltip — 鼠标悬停气泡提示
@@ -47,6 +47,7 @@
 //          [10] CXSteps — 步骤条 (水平/垂直向导进度, 深/浅主题)
 //          [11] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
 //          [12] CXCheckAnim — WinUI3 风格多选框 (Toggle) 动画附加
+//          [13] CXNotify — 系统托盘通知 + 老系统 XCGUI 非模态通知降级
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -91,6 +92,7 @@
 
 //@隐藏{
 class CXTooltip;
+class CXNotify;
 class CXLoading;
 class CXCalendarCard;
 class CXShadow;
@@ -436,6 +438,50 @@ public:
 //      一般 XExitXCGUI() 之前 (或主窗口销毁后) 调一次. 进程退出时 OS 也会回收,
 //      但显式调用更稳妥, 避免 XCGUI 卸载顺序异常弹错框.
 //@别名  清理()
+	static void Cleanup();
+};
+//@分组}
+
+
+// =====================================================================
+// CXNotify — 系统通知 / XCGUI 降级通知
+// =====================================================================
+
+///<通知实际使用的显示通道
+//@别名 通知通道
+enum xnotify_channel_
+{
+	//@别名 通知通道_失败
+	xnotify_channel_failed = 0,
+	//@别名 通知通道_系统
+	xnotify_channel_system = 1,
+	//@别名 通知通道_炫彩
+	xnotify_channel_xcgui  = 2,
+};
+
+//@分组{ 通知
+//@备注 全静态通知工具。Win10/11 复用已经添加的 XCGUI 托盘图标显示系统通知；
+//      系统通知提交失败、Win7 或无法识别的老系统自动降级为右下角 XCGUI 非模态通知窗。
+//@别名 炫彩通知类
+class CXNotify
+{
+public:
+
+//@备注 显示托盘通知。调用前必须已经通过 XTrayIcon_Add() 添加托盘图标。
+//      Win10/11 优先使用系统通知；提交失败或老系统使用不抢焦点、鼠标穿透并自动关闭的 XCGUI 通知窗。
+//@参数 hOwner 用于选择通知所在显示器和 DPI 的 XCGUI 主窗口。
+//@参数 pTitle 通知标题；NULL 或空文本使用“通知”。
+//@参数 pText 通知正文；NULL 或空文本返回失败。
+//@参数 theme XCGUI 降级通知主题；系统通知由 Windows 决定外观。
+//@参数 autoCloseMs XCGUI 降级通知显示时间，范围 1500~30000 毫秒。
+//@返回 通知通道_*。
+//@别名 显示托盘通知()
+	static xnotify_channel_ ShowTray(HWINDOW hOwner, const wchar_t* pTitle,
+		const wchar_t* pText, xuitool_theme_ theme = xuitool_theme_auto,
+		int autoCloseMs = 4500);
+
+//@备注 关闭并销毁仍存在的 XCGUI 降级通知窗，释放字体和定时器。进程退出前调用。
+//@别名 清理()
 	static void Cleanup();
 };
 //@分组}

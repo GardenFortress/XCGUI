@@ -29,6 +29,7 @@
 #include "module_xcgui_uitool_common.inc"
 #include "module_xcgui_draw_softshadow.inc"
 #include "module_xcgui_uitool_tooltip.cpp"
+#include "module_xcgui_uitool_notify.cpp"
 #include "module_xcgui_uitool_loading.cpp"
 #include "module_xcgui_uitool_calendar.cpp"
 #include "module_xcgui_uitool_colorpicker.cpp"

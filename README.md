@@ -7,11 +7,11 @@
 | 模块 | 类 | 用途 |
 |---|---|---|
 | [`module_xcgui_media`](./module_xcgui_media/) | `CXImageEx` / `CXVideo` | 图片 + 视频播放，共享 FFmpeg / 渲染内核 |
-| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` / `CXCardPanel` / `CXSteps` / `CXColorPicker` / `CXCheckAnim` | UI 工具集：提示、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板、卡片面板、步骤条、颜色选择器、多选框动画 |
+| [`module_xcgui_uitool`](./module_xcgui_uitool/) | `CXTooltip` / `CXNotify` / `CXLoading` / `CXCalendarCard` / `CXShadow` / `CXEditDW` / `CXBlur` / `CXChatBubbleBox` / `CXAccordion` / `CXCardPanel` / `CXSteps` / `CXColorPicker` / `CXCheckAnim` | UI 工具集：提示、系统/炫彩通知、加载、日历、阴影、富文本编辑、亚克力、聊天气泡、折叠面板、卡片面板、步骤条、颜色选择器、多选框动画 |
 
 旧独立头文件（`module_xcgui_image.h`、`module_xcgui_video.h`、`module_xcgui_editdw.h` 等）保留为兼容 shim，转发到新模块。
 
-`module_xcgui_uitool` 内 **CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim** 共用 `xuitool_theme_`（深/浅/自定义/跟随系统）；旧 `xshadow_theme_*`、`xblur_theme_*` 已移除。
+`module_xcgui_uitool` 内 **CXTooltip / CXNotify / CXLoading / CXCalendarCard / CXShadow / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim** 共用 `xuitool_theme_`（深/浅/自定义/跟随系统）；旧 `xshadow_theme_*`、`xblur_theme_*` 已移除。
 
 详细 API 见各 `.h` 文件中的 `//@别名` 注释；`module_xcgui_uitool/示例/` 提供完整 demo。
 
@@ -103,6 +103,22 @@ pShadow->SetTheme(xuitool_theme_auto);
 CXTooltip::AddEleTip(hBtn, L"保存当前文档");
 CXTooltip::SetType(hBtn, xtooltip_type_success);
 CXTooltip::SetTheme(hBtn, xuitool_theme_auto);
+```
+
+### CXNotify
+
+`ShowTray` 应在 `XTrayIcon_Add()` 成功后调用。Win10/11 优先提交系统通知；系统提交失败或老系统自动降级为右下角 XCGUI 非模态通知窗。
+
+```cpp
+XTrayIcon_Reset();
+XTrayIcon_SetTips(L"应用名称");
+if (XTrayIcon_Add(hWnd, 43001)) {
+    CXNotify::ShowTray(hWnd, L"应用名称",
+        L"程序仍在后台运行，点击托盘图标可以恢复主窗口。",
+        xuitool_theme_auto, 4500);
+}
+// XExitXCGUI() 前:
+CXNotify::Cleanup();
 ```
 
 ### CXLoading
