@@ -2505,8 +2505,11 @@ public:
 
 //@备注 一键挂载 dcomp acrylic 主导架构 (acrylic owner 子窗承载模糊, XCGUI 透明 owned 上层).
 //      内部完整封装 PoC 流程: 进 layered 透明 → 创建 NOREDIRECTIONBITMAP acrylic 子窗 →
-//      Apply effect chain → owner-owned + WS_EX_APPWINDOW → 装两 subclass 同步 →
+//      Apply effect chain → 保留原 owner 并按需补 WS_EX_APPWINDOW → 装两 subclass同步 →
 //      Show acrylic + 系统圆角. 调用方仅一行调用即可拿到 Win11 Start Menu 同款 acrylic.
+//      若目标窗口在附加前已有 owner (例如模态窗口), 会自动把该 owner 迁移到 acrylic
+//      背板, 形成“原 owner → acrylic → XCGUI 内容窗口”的完整链；Detach 时恢复原 owner
+//      与 WS_EX_APPWINDOW 状态。调用方不需要在附加后再次修正 GWLP_HWNDPARENT.
 //
 //      参数预设按当前 SetTheme/SetTintColor/SetNoise/SetUniformBrightness/SetBlurOpacity
 //      的值用 (没显式 set 走主题默认: light=243,243,243 / blurOpacity=0.5 / sat=1.3 /

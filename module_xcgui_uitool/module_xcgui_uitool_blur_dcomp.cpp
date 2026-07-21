@@ -919,6 +919,8 @@ namespace {
 struct AcrylicHostEntry {
 	HWND acrylicHwnd = NULL;
 	HWND xcguiHwnd   = NULL;
+	HWND originalOwner = NULL;
+	LONG_PTR originalExStyle = 0;
 };
 static std::map<HWND, AcrylicHostEntry> s_acrylicByXcgui; // key = xcgui HWND
 static std::mutex                       s_acrylicMutex;
@@ -1064,6 +1066,11 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 	if (!hWnd || !::XC_IsHWINDOW((HXCGUI)hWnd)) return NULL;
 	HWND xcguiHwnd = ::XWnd_GetHWND(hWnd);
 	if (!xcguiHwnd) return NULL;
+	// 保存 Attach 前的窗口关系。XModalWnd / owned popup 已经在这里携带业务 owner，
+	// acrylic 必须继承它，不能让后续 owner-owned 架构把模态关系截断。
+	HWND originalOwner = (HWND)::GetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT);
+	if (originalOwner && !::IsWindow(originalOwner)) originalOwner = NULL;
+	LONG_PTR originalExStyle = ::GetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE);
 
 	// 已 attach 过 → 仅刷新 effect chain, 不重复建窗.
 	{
@@ -1112,7 +1119,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		xcRect.left - kAcrylicOuterPx, xcRect.top - kAcrylicOuterPx,
 		(xcRect.right - xcRect.left) + 2 * kAcrylicOuterPx,
 		(xcRect.bottom - xcRect.top) + 2 * kAcrylicOuterPx,
-		NULL, NULL, GetModuleHandleW(NULL), NULL);
+		originalOwner, NULL, GetModuleHandleW(NULL), NULL);
 
 	if (pfnSetThreadDpiAwarenessContext && prevDpiCtx) {
 		pfnSetThreadDpiAwarenessContext(prevDpiCtx);
@@ -1135,12 +1142,15 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 	//    XWnd_SetBkInfo(hWnd, L"{99:1.9.9;98:1(0);5:2(15)20(1)21(3)26(1)22(16777216)23(1)9(8,8,8,8);}");
 	//    XWnd_EnableDragWindow(hWnd, TRUE);
 
-	// 5. 建立 owner-owned 关系: acrylic = owner, XCGUI = owned. owned 在 owner 之上.
+	// 5. 建立 owner-owned 关系。若 XCGUI 原来已有 owner，CreateWindowExW 已先把
+	//    acrylic 挂到原 owner；现在再把 XCGUI 挂到 acrylic，完整保留模态/owned 链。
 	::SetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT, (LONG_PTR)acrylicBackdrop);
 
-	// 6. 强制 XCGUI 上 taskbar (owned 默认不上 taskbar, WS_EX_APPWINDOW 强制).
-	LONG_PTR ex = ::GetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE);
-	::SetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE, ex | WS_EX_APPWINDOW);
+	// 6. 仅原本无 owner 的普通顶层窗口需要强制显示到 taskbar。模态/owned 窗口
+	//    保持原扩展样式，避免附加模糊后意外多出独立任务栏按钮。
+	if (!originalOwner){
+		::SetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE, originalExStyle | WS_EX_APPWINDOW);
+	}
 
 	// 7. acrylic 用系统默认 frame: Win11 自动加 round corner + BORDER_COLOR + frame shadow.
 	//    XCGUI 主窗这边由调用方自己控.
@@ -1154,7 +1164,9 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 
 	{
 		std::lock_guard<std::mutex> lk(s_acrylicMutex);
-		s_acrylicByXcgui[xcguiHwnd] = { acrylicBackdrop, xcguiHwnd };
+		s_acrylicByXcgui[xcguiHwnd] = {
+			acrylicBackdrop, xcguiHwnd, originalOwner, originalExStyle
+		};
 	}
 
 	// 9. 显示 acrylic backdrop (SW_SHOWNA 不抢焦点).
@@ -1190,15 +1202,34 @@ void DetachAcrylicHost(void* hxwOpaque){
 	}
 
 	HWND acrylicBackdrop = NULL;
+	HWND originalOwner = NULL;
+	LONG_PTR originalExStyle = 0;
+	bool hasEntry = false;
 	if (xcguiHwnd){
 		std::lock_guard<std::mutex> lk(s_acrylicMutex);
 		auto it = s_acrylicByXcgui.find(xcguiHwnd);
 		if (it != s_acrylicByXcgui.end()){
 			acrylicBackdrop = it->second.acrylicHwnd;
+			originalOwner = it->second.originalOwner;
+			originalExStyle = it->second.originalExStyle;
+			hasEntry = true;
 			s_acrylicByXcgui.erase(it);
 		}
 		::RemoveWindowSubclass(xcguiHwnd, XcguiToAcrylicSyncProc, 0xACBD);
-		::SetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT, 0);
+		// 只在 owner 仍是本实例创建的 acrylic 时恢复，避免覆盖调用方在附加后
+		// 主动设置的新 owner。扩展样式也只恢复本模块改动的 APPWINDOW 位。
+		if (hasEntry){
+			HWND currentOwner = (HWND)::GetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT);
+			if (currentOwner == acrylicBackdrop){
+				HWND restoreOwner = (originalOwner && ::IsWindow(originalOwner))
+					? originalOwner : NULL;
+				::SetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT, (LONG_PTR)restoreOwner);
+			}
+			LONG_PTR currentExStyle = ::GetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE);
+			LONG_PTR restoredExStyle = (currentExStyle & ~((LONG_PTR)WS_EX_APPWINDOW))
+				| (originalExStyle & WS_EX_APPWINDOW);
+			::SetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE, restoredExStyle);
+		}
 	}
 
 	if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){

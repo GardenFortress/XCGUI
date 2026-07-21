@@ -97,8 +97,9 @@ void Disable(HWND host);
 //-----------------------------------------------------------------------------
 // AttachAcrylicHost — 把 test_blur_main PoC 里手写的 acrylic 块封装成一个调用. 内部
 // 1:1 跟 PoC 顺序一致 (注册类 → SetThreadDpi(PMv2) → CreateWindowExW → 还原 DPI →
-// Apply → owner-owned + WS_EX_APPWINDOW → 装 2 个 subclass → ShowWindow). 每 XCGUI
-// 主窗独立 acrylic HWND, 通过 GetAcrylicHwnd(hxw) 取出.
+// Apply → owner-owned → 装 2 个 subclass → ShowWindow). 每 XCGUI 主窗独立 acrylic
+// HWND, 通过 GetAcrylicHwnd(hxw) 取出. 目标 XCGUI 窗口已有 owner 时, acrylic 会继承
+// 该 owner；解绑时恢复原 owner 与 WS_EX_APPWINDOW 状态, 不要求调用方额外传递父窗口句柄.
 //
 // ⚠ 调用方负责在调本接口 *之前* 先做以下两步:
 //      XWnd_SetTransparentType(hxw, window_transparent_shaped);
