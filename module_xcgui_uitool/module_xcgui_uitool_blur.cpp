@@ -263,21 +263,6 @@ enum _XBlur_PathKind {
 	XBLUR_PATH_DCOMP_WINRT,
 };
 
-static bool XBlur_QuerySystemDarkMode(){
-	HKEY hk = NULL;
-	if (RegOpenKeyExW(HKEY_CURRENT_USER,
-	                  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-	                  0, KEY_READ, &hk) != ERROR_SUCCESS) return false;
-	DWORD val = 1, sz = sizeof(val);
-	bool dark = false;
-	if (RegQueryValueExW(hk, L"AppsUseLightTheme", NULL, NULL,
-	                     (LPBYTE)&val, &sz) == ERROR_SUCCESS){
-		dark = (val == 0);
-	}
-	RegCloseKey(hk);
-	return dark;
-}
-
 static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTint, float userBlurOpacity,
                                           int uniformBrightnessIn, float userNoise,
                                           int& tintR, int& tintG, int& tintB, int& tintA,
@@ -286,7 +271,7 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 	bool dark;
 	if      (themeIn == xuitool_theme_light) dark = false;
 	else if (themeIn == xuitool_theme_dark)  dark = true;
-	else                                    dark = XBlur_QuerySystemDarkMode();
+	else                                    dark = XUITool_IsSystemDarkMode() != FALSE;
 
 	if (userTint != 0){
 		tintR = (int)GetRValue(userTint);
@@ -599,7 +584,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 #if XBLUR_ENABLE_DWM_TRANSIENT
 	case XBLUR_PATH_DWM_TRANSIENT: {
 		XBlur_ApplyAccentBlur(host, XBLUR_ACCENT_DISABLED, 0);
-		bool dark = XBlur_QuerySystemDarkMode();
+		bool dark = XUITool_IsSystemDarkMode() != FALSE;
 		s.darkMode = dark;
 		s.activeTint = 0;
 		DWORD backdropType = XBLUR_DWMSBT_TRANSIENTWINDOW;
@@ -697,7 +682,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		bool dark;
 		if (userTheme == xuitool_theme_light)      dark = false;
 		else if (userTheme == xuitool_theme_dark)  dark = true;
-		else                                     dark = XBlur_QuerySystemDarkMode();
+		else                                     dark = XUITool_IsSystemDarkMode() != FALSE;
 		s.darkMode = dark;
 
 		int tintR, tintG, tintB, tintA;
@@ -1788,7 +1773,7 @@ void CXBlur::RedrawSelf(){
 // 主题预设
 //============================================================================
 BOOL CXBlur::IsSystemDarkMode(){
-	return XBlur_QuerySystemDarkMode() ? TRUE : FALSE;
+	return XUITool_IsSystemDarkMode();
 }
 
 void CXBlur::ApplyThemePresetTintNoise(xuitool_theme_ theme){

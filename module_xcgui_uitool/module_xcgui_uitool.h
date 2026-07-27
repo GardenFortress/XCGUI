@@ -1,8 +1,8 @@
 ﻿#ifndef  XCGUI_UITOOL_H
 #define  XCGUI_UITOOL_H
 //@模块名称  炫彩界面库UI工具集
-//@版本  1.1.0
-//@日期  2026-07-21
+//@版本  1.2.0
+//@日期  2026-07-27
 //@作者  未闻花名
 //@QQ    936599025
 //@依赖  module_xcgui_class.h
@@ -114,6 +114,28 @@ DWORD XUITool_GetOsBuild();
 //@备注 返回 Windows 主版本简化值: 11 / 10 / 8 / 7, 无法识别返回 0.
 //@别名 取系统版本()
 int GetCurrentVersion();
+
+//@备注 优先启用 Per-Monitor V2；旧系统依次回退到 Per-Monitor 和系统 DPI 感知。
+//@返回 成功启用任意 DPI 感知模式返回 TRUE；系统已设置时也视为成功。
+//@别名 系统_启用最佳DPI()
+int XUITool_EnableBestDpiAwareness();
+
+//@备注 动态调用 GetDpiForWindow；旧系统回退到窗口 DC 或 96 DPI。
+//@参数 window 目标窗口 HWND，允许为空。
+//@返回 有效 DPI，最小为 96。
+//@别名 系统_取窗口DPI(窗口HWND)
+unsigned int XUITool_GetWindowDpi(HWND window);
+
+//@备注 读取当前用户的应用主题设置；读取失败时返回深色，和 UI 工具集自动主题的回退一致。
+//@返回 系统应用主题为深色返回 TRUE，否则返回 FALSE。
+//@别名 系统_是否深色模式()
+int XUITool_IsSystemDarkMode();
+
+//@备注 加载 Windows 预定义系统光标，供 XCGUI 窗口或元素设置光标使用。
+//@参数 cursorId 以 IDC_ 开头的系统光标标识。
+//@返回 系统光标句柄；加载失败返回 NULL。
+//@别名 系统_加载光标(光标标识)
+HCURSOR XUITool_LoadSystemCursor(const wchar_t* cursorId);
 
 //@分组}
 

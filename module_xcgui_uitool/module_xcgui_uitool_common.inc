@@ -5,6 +5,63 @@
 #ifndef _XCGUI_UITOOL_COMMON_INC_
 #define _XCGUI_UITOOL_COMMON_INC_
 
+namespace _XUIToolSystem {
+
+template <typename T>
+T Resolve(HMODULE module, const char* name)
+{
+	return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
+}
+
+} // namespace _XUIToolSystem
+
+int XUITool_EnableBestDpiAwareness()
+{
+	const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+	using SetContextFn = BOOL(WINAPI*)(HANDLE);
+	if (const auto setContext = _XUIToolSystem::Resolve<SetContextFn>(
+			user32, "SetProcessDpiAwarenessContext")) {
+		if (setContext(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)))) return TRUE;
+		if (GetLastError() == ERROR_ACCESS_DENIED) return TRUE;
+	}
+
+	const HMODULE shcore = LoadLibraryW(L"shcore.dll");
+	if (shcore) {
+		using SetAwarenessFn = HRESULT(WINAPI*)(int);
+		const auto setAwareness = _XUIToolSystem::Resolve<SetAwarenessFn>(
+			shcore, "SetProcessDpiAwareness");
+		const HRESULT result = setAwareness ? setAwareness(2) : E_NOTIMPL;
+		FreeLibrary(shcore);
+		if (SUCCEEDED(result) || result == E_ACCESSDENIED) return TRUE;
+	}
+
+	using SetAwareFn = BOOL(WINAPI*)();
+	if (const auto setAware = _XUIToolSystem::Resolve<SetAwareFn>(user32, "SetProcessDPIAware")) {
+		if (setAware() || GetLastError() == ERROR_ACCESS_DENIED) return TRUE;
+	}
+	return FALSE;
+}
+
+unsigned int XUITool_GetWindowDpi(HWND window)
+{
+	const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+	using GetDpiFn = UINT(WINAPI*)(HWND);
+	if (const auto getDpi = _XUIToolSystem::Resolve<GetDpiFn>(user32, "GetDpiForWindow")) {
+		const UINT dpi = getDpi(window);
+		if (dpi >= 96) return dpi;
+	}
+
+	HWND dcWindow = window;
+	HDC dc = GetDC(dcWindow);
+	if (!dc) {
+		dcWindow = nullptr;
+		dc = GetDC(nullptr);
+	}
+	const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+	if (dc) ReleaseDC(dcWindow, dc);
+	return dpi >= 96 ? static_cast<unsigned int>(dpi) : 96U;
+}
+
 DWORD XUITool_GetOsBuild()
 {
 	static DWORD s_build = 0;
@@ -123,4 +180,15 @@ void ResolvePalette(xuitool_theme_ mode, COLORREF customText, COLORREF customBg,
 }
 
 } // namespace _XUITool
+
+int XUITool_IsSystemDarkMode()
+{
+	return _XUITool::DetectSystemDarkMode();
+}
+
+HCURSOR XUITool_LoadSystemCursor(const wchar_t* cursorId)
+{
+	return cursorId ? LoadCursorW(nullptr, cursorId) : nullptr;
+}
+
 #endif // _XCGUI_UITOOL_COMMON_INC_
