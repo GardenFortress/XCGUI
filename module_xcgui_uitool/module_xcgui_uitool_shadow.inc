@@ -89,7 +89,7 @@ CXShadow::~CXShadow(){
 //   1. 保存主窗原状态 (transparent / padding / layout)
 //   2. 强设 transparent_shaped + alpha 255 (让主窗拥有 alpha 通道)
 //   3. EnableLayout(TRUE) (子元素 layout 避开 padding 圈)
-//   4. 计算 + Apply padding (为 shadow 留位)
+//   4. 把 Attach 前窗口矩形视为视觉 BodyRect, 向外扩展真实窗口并 Apply padding
 //   5. 钩 XWM_WINDPROC + WM_PAINT 事件 + 注入 host map
 //============================================================================
 BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
@@ -131,19 +131,23 @@ BOOL CXShadow::AttachToWnd(HWINDOW hWnd){
     //    实验: EnableDrawBk(FALSE) 会让 XCGUI 跳过整个画布 / WM_PAINT 派发, 导致窗全透.
     ::XWnd_EnableLayout(hWnd, TRUE);    // 元素 layout 避开 padding 圈
 
-    // 4) DPI → padding
+    // 4) 初始状态 + DPI → BodyRect / OuterRect + padding.
+    //    Attach 前调用方设置的窗口矩形始终代表视觉主体; 普通态向四周扩展真实
+    //    HWND, 最大化 / 已停靠态保持系统目标矩形并恢复调用方原 padding.
     RefreshDpi();
-    ApplyPadding();   // 最大化状态在后面由 WM_SIZE 检测后调 ClearPadding
+    m_isMaximized = (::IsZoomed(m_hMainHwnd) != FALSE);
+    m_isMinimized = (::IsIconic(m_hMainHwnd) != FALSE);
+    m_isSnapped = !m_isMaximized && !m_snapDisabled.load() && IsWindowSnapped();
+    m_isActive = (::GetForegroundWindow() == m_hMainHwnd);
+    if (!m_isMaximized && !m_isSnapped){
+        ExpandOuterFromBody();
+        ApplyPadding();
+    } else {
+        ClearPadding();
+    }
 
     // 5) 事件钩子
     HookEvents();
-
-    // 初始状态
-    m_isMaximized = (::IsZoomed(m_hMainHwnd) != FALSE);
-    m_isMinimized = (::IsIconic(m_hMainHwnd) != FALSE);
-    m_isActive    = (::GetForegroundWindow() == m_hMainHwnd);
-
-    if (m_isMaximized) ClearPadding();   // 最大化起始 → 去 padding
 
     // 6) 主题: 优先 adopt 用户设的全局主题 (CXShadow::SetGlobalTheme), 否则用 m_theme
     //    默认值 (xuitool_theme_auto). attach 完后 border / 内圈填充 等是 *已应用* 状态.
@@ -173,6 +177,12 @@ void CXShadow::Detach(){
 
     UnhookEvents();
 
+    // 普通态把真实 OuterRect 收回视觉 BodyRect. 最大化 / Snap 当前外框由系统
+    // 管理, 项目窗口随后通常立即销毁, 不在这里改动系统目标矩形.
+    if (!m_isMaximized && !m_isSnapped){
+        ContractOuterToBody();
+    }
+
     // 还原主窗状态 (transparent / padding / layout / drawBk)
     RestoreMainStyles();
 
@@ -190,12 +200,153 @@ void CXShadow::Detach(){
     m_isMaximized  = false;
     m_isMinimized  = false;
     m_isActive     = true;
+    m_outerExpanded = false;
+    m_internalGeometryChange = false;
     m_saved        = false;
 }
 
 BOOL    CXShadow::IsAttached     () const { return m_hAttachedWnd != NULL; }
 HWINDOW CXShadow::GetAttachedWnd () const { return m_hAttachedWnd; }
 BOOL    CXShadow::IsMaximized    () const { return m_isMaximized ? TRUE : FALSE; }
+
+//============================================================================
+// 视觉主体几何公共入口
+//
+// XWnd_GetRect / XWnd_SetRect 始终操作真实 OuterRect; 本组接口把普通态四周
+// 模拟阴影排除后再暴露给业务层. 未附加 CXShadow 的窗口自动退化为原 API.
+//============================================================================
+BOOL CXShadow::GetBodyClientRect(HWINDOW hWnd, RECT* pRect){
+    if (!pRect || !XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+    RECT rc = {};
+    if (!::XWnd_GetClientRect(hWnd, &rc)) return FALSE;
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    if (p && p->IsInsetVisible()){
+        rc.left   += p->m_marginL;
+        rc.top    += p->m_marginT;
+        rc.right  -= p->m_marginR;
+        rc.bottom -= p->m_marginB;
+        if (rc.right < rc.left) rc.right = rc.left;
+        if (rc.bottom < rc.top) rc.bottom = rc.top;
+    }
+    *pRect = rc;
+    return TRUE;
+}
+
+BOOL CXShadow::GetBodyRect(HWINDOW hWnd, RECT* pRect){
+    if (!pRect || !XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+    RECT rc = {};
+    ::XWnd_GetRect(hWnd, &rc);
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    if (p && p->IsInsetVisible()){
+        rc.left   += p->m_marginL;
+        rc.top    += p->m_marginT;
+        rc.right  -= p->m_marginR;
+        rc.bottom -= p->m_marginB;
+    }
+    *pRect = rc;
+    return TRUE;
+}
+
+BOOL CXShadow::IsSnapped(HWINDOW hWnd){
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    return (p && p->m_isSnapped) ? TRUE : FALSE;
+}
+
+BOOL CXShadow::SetBodyRect(HWINDOW hWnd, const RECT* pRect){
+    if (!pRect || !XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+    if (pRect->right < pRect->left || pRect->bottom < pRect->top) return FALSE;
+
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    if (!p){
+        RECT rc = *pRect;
+        ::XWnd_SetRect(hWnd, &rc);
+        return TRUE;
+    }
+    if (p->m_isMaximized || p->m_isSnapped) return FALSE;
+
+    RECT outer = *pRect;
+    bool shaped = (::XWnd_GetTransparentType(hWnd) == window_transparent_shaped);
+    if (shaped){
+        int L, T, R, B;
+        p->ComputeShadowMargin(&L, &T, &R, &B);
+        outer.left -= L; outer.top -= T;
+        outer.right += R; outer.bottom += B;
+        p->m_outerExpanded = true;
+        p->ApplyPadding();
+    } else {
+        p->m_outerExpanded = false;
+        p->ClearPadding();
+    }
+    p->SetOuterRectInternal(outer);
+    return TRUE;
+}
+
+BOOL CXShadow::SetBodyPosition(HWINDOW hWnd, int x, int y){
+    if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    if (!p){
+        ::XWnd_SetPosition(hWnd, x, y);
+        return TRUE;
+    }
+    if (p->m_isMaximized || p->m_isSnapped) return FALSE;
+
+    int outerX = x, outerY = y;
+    if (p->IsInsetVisible()){
+        // XWnd_SetPosition 与项目现有元素→窗口→屏幕定位链接收屏幕位置;
+        // 阴影 margin 是逻辑像素, 只在这里按目标窗口 DPI 转换一次.
+        outerX -= (int)std::floor((float)p->m_marginL * p->m_dpiScale + 0.5f);
+        outerY -= (int)std::floor((float)p->m_marginT * p->m_dpiScale + 0.5f);
+    }
+    p->SetOuterPositionInternal(outerX, outerY);
+    return TRUE;
+}
+
+BOOL CXShadow::AdjustBodyInScreen(HWINDOW hWnd, int nBorderSpace, BOOL bCoverTaskBar){
+    if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+    CXShadow* p = _CXShadow_FindByHWindow(hWnd);
+    if (!p) return ::XWnd_AdjustInScreen(hWnd, nBorderSpace, bCoverTaskBar);
+    if (!p->m_hMainHwnd || p->m_isMaximized || p->m_isSnapped) return FALSE;
+
+    RECT outer = {};
+    if (!::GetWindowRect(p->m_hMainHwnd, &outer)) return FALSE;
+    RECT body = outer;
+    if (p->IsInsetVisible()){
+        auto phys = [p](int logical) -> int {
+            return (int)std::floor((float)logical * p->m_dpiScale + 0.5f);
+        };
+        body.left += phys(p->m_marginL); body.top += phys(p->m_marginT);
+        body.right -= phys(p->m_marginR); body.bottom -= phys(p->m_marginB);
+    }
+
+    HMONITOR mon = ::MonitorFromRect(&body, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!mon || !::GetMonitorInfoW(mon, &mi)) return FALSE;
+    RECT bounds = bCoverTaskBar ? mi.rcMonitor : mi.rcWork;
+    int space = (int)std::floor((float)(std::max)(0, nBorderSpace)
+                               * p->m_dpiScale + 0.5f);
+    bounds.left += space; bounds.top += space;
+    bounds.right -= space; bounds.bottom -= space;
+
+    int bodyW = body.right - body.left;
+    int bodyH = body.bottom - body.top;
+    int boundsW = bounds.right - bounds.left;
+    int boundsH = bounds.bottom - bounds.top;
+    int dx = 0, dy = 0;
+    if (bodyW >= boundsW) dx = bounds.left - body.left;
+    else if (body.left < bounds.left) dx = bounds.left - body.left;
+    else if (body.right > bounds.right) dx = bounds.right - body.right;
+    if (bodyH >= boundsH) dy = bounds.top - body.top;
+    else if (body.top < bounds.top) dy = bounds.top - body.top;
+    else if (body.bottom > bounds.bottom) dy = bounds.bottom - body.bottom;
+    if (dx == 0 && dy == 0) return FALSE;
+
+    p->m_internalGeometryChange = true;
+    BOOL ok = ::SetWindowPos(p->m_hMainHwnd, NULL,
+                             outer.left + dx, outer.top + dy, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    p->m_internalGeometryChange = false;
+    return ok;
+}
 
 //============================================================================
 // 事件钩子:
@@ -282,7 +433,7 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
         // (任何路径: SC_MAXIMIZE / ShowWindow(SW_MAXIMIZE) / SetWindowPlacement /
         // WS_MAXIMIZE 创建属性 / 拖到顶 snap-to-max), 几何虽然 = 全工作区, 必须
         // 放行. 仅在窗口处于非最大化状态时才执行 snap 几何过滤.
-        if (p->IsSnapEnabled() && !::IsZoomed(hwnd)){
+        if (p->IsSnapEnabled() && !p->IsInternalGeometryChange() && !::IsZoomed(hwnd)){
             WINDOWPOS* wpos = reinterpret_cast<WINDOWPOS*>(lp);
             if (wpos && _CXShadow_IsSnapTargetGeom(wpos, hwnd)){
                 wpos->flags |= SWP_NOMOVE | SWP_NOSIZE;
@@ -346,12 +497,11 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
     // 我们的累加都生效 (子类链 wndproc 顺序保证).
     //
     // *单位*: ptMinTrackSize 是 *物理像素* (Win32 原生约定, NCCALCSIZE/SetWindowPos
-    // 路径上的尺寸全部物理). m_curPadL/T/R/B 是 *逻辑像素* (与 XWnd_SetPadding 输入
-    // 一致). 必须 × dpiScale 物理化, 否则 DPI 模式下 minSize 加得太少, padding 仍
-    // 吃 inner.
+    // 路径上的尺寸全部物理). m_marginL/T/R/B 是 *逻辑像素*. 必须 × dpiScale
+    // 物理化, 否则 DPI 模式下视觉主体最小尺寸会被阴影外框吃掉.
     //
     // 边界:
-    //   * snap / maximized 时 padding=0, 加 0 = no-op, 不影响.
+    //   * snap / maximized 时 margin=0, 加 0 = no-op, 不影响调用方 BasePadding.
     //   * ptMaxTrackSize / ptMaxSize 不动 — 最大化的时候 padding 也清掉, 系统给的
     //     工作区尺寸刚好.
     if (msg == WM_GETMINMAXINFO){
@@ -360,8 +510,8 @@ static LRESULT CALLBACK _CXShadow_HwndSubclassProc(
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lp);
         if (p && mmi){
             float s = p->GetDpiScale();
-            int padX_phys = (int)((float)p->GetCurPadX() * s + 0.5f);
-            int padY_phys = (int)((float)p->GetCurPadY() * s + 0.5f);
+            int padX_phys = (int)((float)p->GetCurInsetX() * s + 0.5f);
+            int padY_phys = (int)((float)p->GetCurInsetY() * s + 0.5f);
             if (padX_phys > 0) mmi->ptMinTrackSize.x += padX_phys;
             if (padY_phys > 0) mmi->ptMinTrackSize.y += padY_phys;
         }
@@ -559,6 +709,8 @@ int CXShadow::OnWndProcImpl(HWINDOW hWnd, UINT msg,
         // Snap 控制状态: 主窗已死, 不再 SetWindowLong, 仅清 flag.
         m_maxBoxSaved         = false;
         m_maxBoxOriginallySet = false;
+        m_outerExpanded       = false;
+        m_internalGeometryChange = false;
         break;
     }
     (void)hWnd;
@@ -581,6 +733,52 @@ void CXShadow::RefreshDpi(){
     if (dpi <= 0) dpi = 96;
     m_dpi      = dpi;
     m_dpiScale = (float)dpi / 96.0f;
+}
+
+bool CXShadow::IsInsetVisible() const {
+    if (!m_outerExpanded || m_isMaximized || m_isSnapped || !m_hAttachedWnd) return false;
+    if (::XWnd_GetTransparentType(m_hAttachedWnd) != window_transparent_shaped) return false;
+    return m_marginL || m_marginT || m_marginR || m_marginB;
+}
+
+void CXShadow::SetOuterRectInternal(const RECT& rect){
+    if (!m_hAttachedWnd) return;
+    RECT target = rect;
+    m_internalGeometryChange = true;
+    ::XWnd_SetRect(m_hAttachedWnd, &target);
+    m_internalGeometryChange = false;
+}
+
+void CXShadow::SetOuterPositionInternal(int x, int y){
+    if (!m_hAttachedWnd) return;
+    m_internalGeometryChange = true;
+    ::XWnd_SetPosition(m_hAttachedWnd, x, y);
+    m_internalGeometryChange = false;
+}
+
+void CXShadow::ExpandOuterFromBody(){
+    if (!m_hAttachedWnd || m_outerExpanded || m_isMaximized || m_isSnapped) return;
+    RECT outer = {};
+    ::XWnd_GetRect(m_hAttachedWnd, &outer);
+    int L, T, R, B;
+    ComputeShadowMargin(&L, &T, &R, &B);
+    outer.left -= L; outer.top -= T;
+    outer.right += R; outer.bottom += B;
+    // SetRect 同步派发 WINDOWPOSCHANGING; 先置状态防止重入路径再次扩展.
+    m_outerExpanded = true;
+    SetOuterRectInternal(outer);
+}
+
+void CXShadow::ContractOuterToBody(){
+    if (!m_hAttachedWnd || !m_outerExpanded || m_isMaximized || m_isSnapped) return;
+    RECT body = {};
+    ::XWnd_GetRect(m_hAttachedWnd, &body);
+    int L, T, R, B;
+    ComputeShadowMargin(&L, &T, &R, &B);
+    body.left += L; body.top += T;
+    body.right -= R; body.bottom -= B;
+    m_outerExpanded = false;
+    SetOuterRectInternal(body);
 }
 
 void CXShadow::Invalidate(){
@@ -724,7 +922,9 @@ void CXShadow::RestoreMainStyles(){
     // RestoreMaxBox 内部对 "未 strip" 是 no-op, 安全调用.
     RestoreMaxBox();
 
-    m_curPadL = m_curPadT = m_curPadR = m_curPadB = 0;
+    m_marginL = m_marginT = m_marginR = m_marginB = 0;
+    m_curPadL = m_savedPadL; m_curPadT = m_savedPadT;
+    m_curPadR = m_savedPadR; m_curPadB = m_savedPadB;
 }
 
 //============================================================================
@@ -829,6 +1029,10 @@ BOOL CXShadow::IsMaximizeEnabled() const {
 // padding 计算与应用
 //
 // margin = _XUITool::kShadowMargin 四边等宽 (与 tooltip / calendar 一致).
+// Attach 前的窗口矩形和 padding 都属于视觉主体契约:
+//   OuterRect     = Inflate(BodyRect, margin)
+//   AppliedPad    = BasePadding + margin
+// 因此附加阴影不会减少原布局可用宽高, 也不会覆盖调用方已有 padding.
 //============================================================================
 // ★ DPI 单位惯例 (跟 module_xcgui_image / video / blur / editdw 对齐) ★
 //
@@ -865,13 +1069,12 @@ void CXShadow::ApplyPadding(){
     ComputeShadowMargin(&L, &T, &R, &B);
     m_marginL = L; m_marginT = T; m_marginR = R; m_marginB = B;
 
-    // 2) OS padding = margin + bw, 让子元素 layout 起点 (0,0 元素坐标) 不压在
-    //    1px AA 描边上 (issue #1). bw=0 时 padding == margin.
-    // bw / margin / Lp 全部 *逻辑像素* — XWnd_SetPadding 接收 logical (与 XEle_GetWidth
-    // 等同惯例; XCGUI EnableDPI 模式下自动 × dpiScale 化 物理 padding).
-    int bw = (int)std::floor(m_borderWidth.load() + 0.5f);
-    if (bw < 0) bw = 0;
-    int Lp = L + bw, Tp = T + bw, Rp = R + bw, Bp = B + bw;
+    // 2) 窗口实际 padding = Attach 前 BasePadding + margin. 描边属于 BodyRect
+    //    边界内的视觉层, 不额外吃布局尺寸. 所有值均为 XCGUI 逻辑像素.
+    int Lp = m_savedPadL + L;
+    int Tp = m_savedPadT + T;
+    int Rp = m_savedPadR + R;
+    int Bp = m_savedPadB + B;
 
     if (Lp == m_curPadL && Tp == m_curPadT && Rp == m_curPadR && Bp == m_curPadB){
         return;   // 没变化, 跳过 SetPadding (避免触发不必要的 XCGUI relayout)
@@ -883,24 +1086,25 @@ void CXShadow::ApplyPadding(){
 void CXShadow::ClearPadding(){
     if (!m_hAttachedWnd) return;
     bool anyMargin = (m_marginL || m_marginT || m_marginR || m_marginB);
-    bool anyPad    = (m_curPadL || m_curPadT || m_curPadR || m_curPadB);
-    if (!anyMargin && !anyPad) return;
+    bool padChanged = (m_curPadL != m_savedPadL || m_curPadT != m_savedPadT
+                    || m_curPadR != m_savedPadR || m_curPadB != m_savedPadB);
+    if (!anyMargin && !padChanged) return;
 
-    if (anyPad){
-        ::XWnd_SetPadding(m_hAttachedWnd, 0, 0, 0, 0);
+    if (padChanged){
+        ::XWnd_SetPadding(m_hAttachedWnd,
+                          m_savedPadL, m_savedPadT, m_savedPadR, m_savedPadB);
     }
     m_marginL = m_marginT = m_marginR = m_marginB = 0;
-    m_curPadL = m_curPadT = m_curPadR = m_curPadB = 0;
+    m_curPadL = m_savedPadL; m_curPadT = m_savedPadT;
+    m_curPadR = m_savedPadR; m_curPadB = m_savedPadB;
 }
 
 //============================================================================
 // aero snap 检测
 //
-// 思路: aero snap 后窗口至少有一边 *精确* 贴住 monitor 的工作区边缘 (剔除任务栏).
-//   - 全屏 maximized: 4 边都 ≤ 工作区 (实际用 IsZoomed 判)
-//   - half-screen snap: 左/右 半屏, 上下贴边
-//   - quad snap (Win11):  4 个角分别占 1/4 屏幕, 至少 2 边贴边
-// 只要任一边贴边, 视觉上 "阴影超出屏幕被裁" — 此时直接 ClearPadding 隐藏阴影.
+// 思路: 只有完整匹配系统 full / half / quarter 目标矩形才视为 aero snap.
+// BodyRect 放到屏幕边缘时 OuterRect 会因阴影自然伸出工作区; 不能再用
+// "任意一边 <= / >= 工作区" 判断, 否则普通贴边窗口会被误判并重置 padding.
 //
 // 注: GetWindowRect 不含 DPI 偏移问题, 系统物理坐标. 与 GetMonitorInfo 同坐标系.
 //============================================================================
@@ -911,19 +1115,13 @@ bool CXShadow::IsWindowSnapped() const {
 
     RECT wr;
     if (!::GetWindowRect(m_hMainHwnd, &wr)) return false;
-
-    HMONITOR hMon = ::MonitorFromWindow(m_hMainHwnd, MONITOR_DEFAULTTONEAREST);
-    if (!hMon) return false;
-    MONITORINFO mi = { sizeof(mi) };
-    if (!::GetMonitorInfoW(hMon, &mi)) return false;
-    const RECT& wa = mi.rcWork;
-
-    // 任意一边贴边 → snap. 用 ≤/≥ 而不是 == 是因为 Win10/11 偶尔会让窗口超出
-    // 1~2 像素 (DPI 取整误差 / shaped window 的 frame 微调).
-    return wr.left   <= wa.left
-        || wr.top    <= wa.top
-        || wr.right  >= wa.right
-        || wr.bottom >= wa.bottom;
+    WINDOWPOS pos = {};
+    pos.hwnd = m_hMainHwnd;
+    pos.x = wr.left;
+    pos.y = wr.top;
+    pos.cx = wr.right - wr.left;
+    pos.cy = wr.bottom - wr.top;
+    return _CXShadow_IsSnapTargetGeom(&pos, m_hMainHwnd);
 }
 
 //============================================================================
@@ -944,13 +1142,9 @@ void CXShadow::SyncWindowState(){
     // 几何时 IsWindowSnapped 误返 true).
     m_isSnapped   = !m_isMaximized && !m_snapDisabled.load() && IsWindowSnapped();
 
-    // 真最大化前提: 窗口仍带 WS_MAXIMIZEBOX. EnableMaximize(FALSE) 期间 strip
-    // 掉了, 此时即使 IsZoomed 报 true (旧的 SC_MAXIMIZE 模拟态), 也强制视为
-    // 非最大化 — 让阴影 padding 不被错误清掉.
-    if (m_isMaximized){
-        LONG s = ::GetWindowLongW(m_hMainHwnd, GWL_STYLE);
-        if (!(s & WS_MAXIMIZEBOX)) m_isMaximized = false;
-    }
+    // IsZoomed 是真最大化的唯一事实源. EnableSnap(TRUE) 为阻止 Snap 会临时
+    // strip WS_MAXIMIZEBOX, 但 Win+Up / API 最大化仍然合法; 不能再因 style 中
+    // 缺少 WS_MAXIMIZEBOX 把 IsZoomed 覆盖为 false, 否则最大化仍绘制阴影.
 
     // 隐藏阴影条件: 最大化 || snap. 二者都不动 padding 内容, 直接 ClearPadding.
     //
@@ -968,7 +1162,7 @@ void CXShadow::SyncWindowState(){
     //   B) *离开* snap (snap → unsnap, 用户从 snap 状态拖回普通窗口):
     //      1) Win11 在拖动开始时 *立即* 把窗口尺寸还原到 pre-snap 大小 (用户期望窗
     //         口跟着光标走). 此时 IsWindowSnapped()=false.
-    //      2) 如果同样延迟到松手, 拖拽中 padding=0, 视觉上 inner 充满全窗 (没有阴
+    //      2) 如果同样延迟到松手, 拖拽中只有 BasePadding, 视觉上 inner 充满全窗 (没有阴
     //         影边), 直到用户松手 padding 才回来 — 用户实测体验差.
     //      → 解法: 拖拽中, 仅对 "wasHide && !nowHide" 这条路径立即 ApplyPadding.
     //         "!wasHide && nowHide" (即进入 snap) 仍延迟.
@@ -976,6 +1170,7 @@ void CXShadow::SyncWindowState(){
     bool wasHide = wasZoomed     || wasSnapped;
     if (m_inSizeMove){
         if (wasHide && !nowHide){
+            if (!m_outerExpanded) ExpandOuterFromBody();
             ApplyPadding();    // snap/max → 普通: 立即恢复 padding
             _CXShadow_LiveRepaint(this);
         } else if (!nowHide){
@@ -989,6 +1184,10 @@ void CXShadow::SyncWindowState(){
     if (nowHide){
         ClearPadding();
     } else {
+        // Attach 时若窗口已经最大化, 当时没有扩展 normal 外框. 第一次恢复为普通
+        // 状态时把系统还原出的 BodyRect 向外扩展一次; 之后 placement 保存的就是
+        // OuterRect, 最大化 / Snap 往返不再重复扩展.
+        if (!m_outerExpanded) ExpandOuterFromBody();
         ApplyPadding();
     }
 
@@ -1052,11 +1251,12 @@ int CXShadow::OnWndPaintImpl(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled){
     } else {
         // 防御性 ApplyPadding: 上一帧若处于降级状态把 padding 清掉了, 此处恢复.
         // 仅在 *正常态* (非 max/snap) 调用 — max/snap 由 SyncWindowState 主动维持
-        // padding=0, 不能在这里把 padding 强行写回去 (否则 snap 时阴影会重新出现).
+        // 已恢复 BasePadding, 不能在这里把阴影 margin 强行写回去 (否则 snap 时阴影会重新出现).
         if (!m_isMaximized && !m_isSnapped){
+            if (!m_outerExpanded) ExpandOuterFromBody();
             ApplyPadding();   // 内部对 m_curPad* 幂等
         }
-        if (m_isMaximized){
+        if (m_isMaximized || m_isSnapped){
             DrawMaximizedPaint(hDraw, cw, ch);
         } else {
             DrawNormalPaint(hDraw, cw, ch);

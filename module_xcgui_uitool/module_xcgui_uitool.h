@@ -1167,6 +1167,60 @@ public:
 //@别名  立即刷新()
     void Invalidate();
 
+    // ===== 视觉主体几何 =====
+//@备注 获取窗口视觉主体在 XCGUI 客户区内的逻辑坐标. CXShadow 普通态会排除
+//      四周模拟阴影; 最大化 / Snap / 未附加 CXShadow 时返回完整客户区.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@参数 pRect 接收视觉主体客户区逻辑坐标.
+//@返回 成功 TRUE, 参数或窗口无效 FALSE.
+//@别名  取窗口主体客户区坐标()
+    static BOOL GetBodyClientRect(HWINDOW hWnd, RECT* pRect);
+
+//@备注 获取窗口视觉主体坐标, 单位及坐标系与 XWnd_GetRect / 窗口_取坐标()
+//      完全相同. 普通阴影态自动排除阴影; 最大化 / Snap / 未附加时等同
+//      XWnd_GetRect.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@参数 pRect 接收视觉主体坐标.
+//@返回 成功 TRUE, 参数或窗口无效 FALSE.
+//@别名  取窗口主体坐标()
+    static BOOL GetBodyRect(HWINDOW hWnd, RECT* pRect);
+
+//@备注 判断已附加 CXShadow 的窗口当前是否处于系统 Snap 停靠状态. 未附加返回 FALSE.
+//      真最大化由 IsMaximized / 窗口_是否最大化() 单独判断.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@别名  是否窗口停靠()
+    static BOOL IsSnapped(HWINDOW hWnd);
+
+//@备注 设置窗口视觉主体坐标, 单位及坐标系与 XWnd_SetRect / 窗口_置坐标()
+//      完全相同. 普通阴影态自动扩展真实外框, 保持传入的主体位置和尺寸;
+//      未附加 CXShadow 时直接调用 XWnd_SetRect. 真最大化 / Snap 时拒绝修改.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@参数 pRect 目标视觉主体坐标.
+//@返回 成功 TRUE; 参数无效或窗口处于最大化 / Snap 返回 FALSE.
+//@别名  置窗口主体坐标()
+    static BOOL SetBodyRect(HWINDOW hWnd, const RECT* pRect);
+
+//@备注 移动窗口视觉主体左上角, 坐标语义与 XWnd_SetPosition / 窗口_置位置()
+//      相同. 普通阴影态自动排除左上阴影偏移; 未附加时直接移动窗口.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@参数 x 视觉主体目标 X.
+//@参数 y 视觉主体目标 Y.
+//@返回 成功 TRUE; 窗口无效或处于最大化 / Snap 返回 FALSE.
+//@别名  置窗口主体位置()
+    static BOOL SetBodyPosition(HWINDOW hWnd, int x, int y);
+
+//@备注 将视觉主体调整到所在显示器范围内. 阴影允许伸出显示器并被裁切, 不会为了
+//      容纳阴影把菜单或原位弹窗额外向内推. nBorderSpace 为逻辑像素;
+//      bCoverTaskBar=FALSE 使用工作区, TRUE 使用整个显示器. 未附加时退化为
+//      XWnd_AdjustInScreen.
+//@参数 hWnd 目标 XCGUI 窗口.
+//@参数 nBorderSpace 主体与显示器边缘的逻辑间隔.
+//@参数 bCoverTaskBar 是否允许覆盖任务栏.
+//@返回 窗口位置发生改变 TRUE, 无需移动或失败 FALSE.
+//@别名  调整窗口主体到屏幕内()
+    static BOOL AdjustBodyInScreen(HWINDOW hWnd, int nBorderSpace = 0,
+                                   BOOL bCoverTaskBar = FALSE);
+
     // ===== Snap / 最大化 控制 =====
 //@备注 启用 / 禁用本窗的 *Aero Snap 阻止* 功能. **默认 TRUE — snap 被阻止**.
 //      *(注意: 与 CXBlur::EnableSnap 语义相反, 本类默认就阻止 snap. 因为 snap
@@ -1266,7 +1320,7 @@ private:
     // ===== 状态机 =====
     bool    m_isMaximized   = false;
     bool    m_isMinimized   = false;
-    bool    m_isSnapped     = false;      // aero snap (任意一边贴 monitor work area) → 阴影隐藏
+    bool    m_isSnapped     = false;      // aero snap (完整匹配系统目标几何) → 阴影隐藏
     bool    m_isActive      = true;
     bool    m_dirty         = true;       // 保留字段; 重绘由 Invalidate → XWnd_Redraw 触发
     bool    m_eventsHooked  = false;
@@ -1324,16 +1378,20 @@ private:
 
     // ===== 当前几何 / padding =====
     //
-    // 区分两组值, 不能混用 (历史 bug 来源):
+    // 区分两组值, 不能混用:
     //   m_marginL/T/R/B  : *阴影几何 margin* (= _XUITool::kShadowMargin 四边等宽).
     //                       用于: 内圈 bg / 描边 RECT, WM_NCHITTEST halo 边界.
-    //   m_curPadL/T/R/B  : *OS padding* (= margin + borderWidth_phys),
-    //                       通过 XWnd_SetPadding 写到 XCGUI. 比 margin 多 borderWidth
-    //                       是为让子元素 layout 起点不压在 1px 描边上.
+    //   m_curPadL/T/R/B  : *实际写入的窗口 padding* (= Attach 前 padding + margin).
+    //                       描边画在 BodyRect 边界内, 不再额外吃掉布局尺寸.
     //
-    // ApplyPadding 会同步写两组值; ClearPadding 把两组都清零.
+    // ApplyPadding 会同步写两组值; ClearPadding 只清 margin 并恢复 Attach 前 padding.
     int     m_marginL = 0, m_marginT = 0, m_marginR = 0, m_marginB = 0;
     int     m_curPadL = 0, m_curPadT = 0, m_curPadR = 0, m_curPadB = 0;
+    // 普通态 / WINDOWPLACEMENT 的 normal rect 是否已经包含模拟阴影外框.
+    // 最大化 / Snap 时当前 HWND 由系统占满目标区, 但其还原矩形仍保持此状态.
+    bool    m_outerExpanded = false;
+    // 仅标识 CXShadow 自己发起的几何转换, 防止 Snap 过滤误拦.
+    bool    m_internalGeometryChange = false;
 
 
     // ===== 视觉参数 (逻辑像素 @ 96 DPI) =====
@@ -1359,13 +1417,12 @@ public:
     // 用户代码请勿直接调用 — 仅用于 click-through 命中测试.
     LRESULT ComputeNcHitTest(int screenX, int screenY) const;
 
-    // 当前 padding (逻辑像素, 与 XWnd_SetPadding 单位一致). 供子类 proc 的
-    // WM_GETMINMAXINFO 用, 将 ptMinTrackSize 加上 padding × dpiScale (物理),
-    // 让用户配置的 minSize 不被阴影吃掉.
-    // snap / max 状态 padding=0, 返 0 — 不影响系统对那两种状态的 sizing.
-    int   GetCurPadX()  const { return m_curPadL + m_curPadR; }
-    int   GetCurPadY()  const { return m_curPadT + m_curPadB; }
+    // 当前生效的纯阴影 inset. WM_GETMINMAXINFO 只把这部分加到用户配置的视觉
+    // 主体最小尺寸, 不能把调用方原 padding 重复计算.
+    int   GetCurInsetX() const { return m_marginL + m_marginR; }
+    int   GetCurInsetY() const { return m_marginT + m_marginB; }
     float GetDpiScale() const { return m_dpiScale; }
+    BOOL  IsInternalGeometryChange() const { return m_internalGeometryChange ? TRUE : FALSE; }
 
 private:
     // ===== 生命周期 =====
@@ -1395,11 +1452,16 @@ private:
 
     // ===== padding 控制 =====
     void ComputeShadowMargin(int* pL, int* pT, int* pR, int* pB) const;  // 按 DPI 算 4 边 margin
-    void ApplyPadding();         // = ComputeMargin + XWnd_SetPadding + EnableLayout(TRUE) + 缓存
-    void ClearPadding();         // SetPadding(0,0,0,0) (最大化态用)
+    void ApplyPadding();         // Attach 前 padding + shadow margin (普通阴影态)
+    void ClearPadding();         // 恢复 Attach 前 padding (最大化 / Snap / 无阴影态)
+    void ExpandOuterFromBody();  // 当前普通窗口矩形按 BodyRect 向外扩展一次
+    void ContractOuterToBody();  // 当前普通窗口矩形收回 BodyRect
+    void SetOuterRectInternal(const RECT& rect);
+    void SetOuterPositionInternal(int x, int y);
+    bool IsInsetVisible() const;
 
-    // aero snap 检测: 任意一边贴 monitor work area 即视为 snap. 阴影应隐藏 (SyncWindowState)
-    // (issue #4: 窗口拖到屏幕边缘触发系统缩放后, 阴影占太多空间)
+    // aero snap 检测: 只有完整匹配工作区 full / half / quarter 几何才视为 snap.
+    // 普通窗口的阴影伸出工作区不能误判为停靠.
     bool IsWindowSnapped() const;
     // 重新计算 m_isMaximized/m_isSnapped/m_isMinimized 并 ClearPadding 或 ApplyPadding.
     void SyncWindowState();
