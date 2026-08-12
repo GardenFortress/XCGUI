@@ -304,7 +304,7 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 	// 两个主题分别定值而不共用一个数, 是因为色度余量差得远: 浅色 tint 243 只剩
 	// 12/255 的正向余量, 主通道很快顶到 255 被截住, 倍率得给足才透得出颜色; 深色
 	// tint 32 正向余量几乎满格, 同样倍率下颜色会浓得多. 现值经实机比对校准.
-	saturation = dark ? 0.70f : 0.80f;
+	saturation = dark ? 0.58f : 0.80f;
 
 	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
 		noiseAlphaPct = userNoise * 100.0f;
@@ -651,7 +651,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		//   主题   | tint RGBA              | blur visible | saturation | noiseAlphaPct | uniformBright
 		//   -------|------------------------|--------------|------------|---------------|--------------
 		//   浅色   | (243,243,243,128)      | 35%          | 0.80       | 1%            | TRUE
-		//   深色   | (32, 32, 32, 217)      | 22%          | 0.70       | 2.1%          | TRUE
+		//   深色   | (32, 32, 32, 217)      | 22%          | 0.58       | 2.1%          | TRUE
 		//
 		// 亮度锁定下 blur visible × saturation 是同一个量的两个因子 (见
 		// XBlur_ResolveDcompEffectArgs): 桌面色度搬过来的总倍率 = 两者相乘,
