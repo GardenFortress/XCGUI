@@ -285,7 +285,23 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 
 	blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
 	                                        : (dark ? 0.22f : 0.35f);
-	saturation = dark ? 1.2f : 1.3f;
+
+	// 亮度锁定开启时 (默认), dcomp 链路 Saturation → LuminosityReplace → Opacity
+	// 的合成结果精确等于:
+	//     结果 = tint + blurOpacity × saturation × (桌面色 − 桌面亮度)
+	// 亮度恒等于 tint 亮度 (所以不会被桌面明暗拖出割裂), saturation 在这里的实际
+	// 作用是"桌面色度搬过来的倍率", 不是通常意义的提饱和.
+	//
+	// 原来的 1.2 / 1.3 (>1) 有两个副作用, 就是"提取黑白灰以外的颜色"发色偏色的
+	// 来源:
+	//   1. 桌面的 *绝对* 色度被放大后贴到一块近黑 (32) 或近白 (243) 的表面上,
+	//      相对饱和度远高于桌面本身 —— 中性面板会读成偏红 / 偏青的色块.
+	//   2. 8bpc 中间缓冲逐通道 clamp: 通道一旦出界就被单独截断, 色相被拽偏
+	//      (亮而饱和的壁纸最明显).
+	// 取 <1 的倍率同时消掉这两项: 色相原样等比搬运, 只保留一层淡色, 观感是
+	// "窗口沾了点桌面颜色"而不是"窗口被染色". 深色面板对低亮度色度更敏感, 所以
+	// 比浅色压得更狠.
+	saturation = dark ? 0.55f : 0.80f;
 
 	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
 		noiseAlphaPct = userNoise * 100.0f;
@@ -631,8 +647,13 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		//
 		//   主题   | tint RGBA              | blur visible | saturation | noiseAlphaPct | uniformBright
 		//   -------|------------------------|--------------|------------|---------------|--------------
-		//   浅色   | (243,243,243,128)      | 50%          | 1.3        | 1%            | TRUE
-		//   深色   | (32, 32, 32, 217)      | 15%          | 1.2        | 3%            | TRUE
+		//   浅色   | (243,243,243,128)      | 35%          | 0.80       | 1%            | TRUE
+		//   深色   | (32, 32, 32, 217)      | 22%          | 0.55       | 2.1%          | TRUE
+		//
+		// 亮度锁定下 blur visible × saturation 是同一个量的两个因子 (见
+		// XBlur_ResolveDcompEffectArgs): 桌面色度搬过来的总倍率 = 两者相乘,
+		// 亮度始终由 tint 决定. 想让桌面颜色更明显调 blurOpacity, 想修色偏调
+		// saturation.
 		//
 		// tint.A 语义跟 ACCENT_ACRYLIC GradientColor.A 一致:
 		//   A=255 完全 tint (看不到 blur); A=0 完全 blur (看不到 tint).
@@ -647,8 +668,8 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		//   uniformBright  : 走 m_uniformBrightness atomic, 默认 TRUE (= PoC 默认).
 		//                    用户 SetUniformBrightness 可覆盖, dcomp 路径下立即
 		//                    reapply effect chain.
-		//   saturation     : 暂未暴露 setter, 永远走主题默认. 待 SetSaturation API
-		//                    上线后从 m_saturation 读.
+		//   saturation     : 暂未暴露 setter, 永远走主题默认 (亮度锁定下 = 色度搬运
+		//                    倍率). 待 SetSaturation API 上线后从 m_saturation 读.
 		//   noiseAlphaPct  : 同上, 待 SetNoiseAlphaPercent API 上线.
 		//   inset          : 给 EnableNativeShadow 准备 (visual 收缩留阴影空间).
 		//                    现在硬编 0; 后续接入 m_nativeShadowEnabled 后改成 8.

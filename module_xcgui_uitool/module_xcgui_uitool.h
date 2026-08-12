@@ -2682,9 +2682,14 @@ public:
 //
 //      取值范围 0.0 ~ 1.0:
 //        0.0  完全不通透 — 仅 tint 颜色, 看不到背景 blur
-//        0.15 PoC dark 默认 — tint 主导 85%, 背景隐约透出 15% (Win11 Start Menu 深色)
-//        0.5  PoC light 默认 — tint / blur 各半 (Win11 Start Menu 浅色)
+//        0.22 dark 默认 — tint 主导, 背景隐约透出 (Win11 Start Menu 深色)
+//        0.35 light 默认 (Win11 Start Menu 浅色)
 //        1.0  完全通透 — 仅 blur, 看不到 tint (有点像玻璃)
+//
+//      亮度锁定开启时 (SetUniformBrightness 默认 TRUE), 本值只决定透出多少桌面
+//      *色度*: 窗口亮度恒等于 tint 亮度, 桌面的黑 / 白 / 灰不会让窗口变亮变暗,
+//      所以调大不会出现半窗偏亮的割裂色块, 只是桌面颜色更明显. 关闭亮度锁定后
+//      才恢复"桌面明暗也一起透出"的玻璃语义.
 //
 //      传 *负值* (例如 -1) → 还原为"按主题默认 + tintA 反算" (默认状态).
 //
