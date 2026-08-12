@@ -2913,6 +2913,10 @@ int CALLBACK _XClr_OnPaintWindow(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled)
 	};
 	drawSep(ctx->sepHeaderY);
 	drawSep(ctx->sepFooterY);
+
+	// 描边最后画: 盖住分隔线抵到圆角处的端头.
+	_XUITool::DrawBodyBorder(hDraw, bodyRc, ctx->cornerRadius, ctx->colors.border,
+		_XUITool::WindowDpiScale(hWnd));
 	return 0;
 }
 
