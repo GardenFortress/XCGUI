@@ -299,9 +299,12 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 	//   2. 8bpc 中间缓冲逐通道 clamp: 通道一旦出界就被单独截断, 色相被拽偏
 	//      (亮而饱和的壁纸最明显).
 	// 取 <1 的倍率同时消掉这两项: 色相原样等比搬运, 只保留一层淡色, 观感是
-	// "窗口沾了点桌面颜色"而不是"窗口被染色". 深色面板对低亮度色度更敏感, 所以
-	// 比浅色压得更狠.
-	saturation = dark ? 0.55f : 0.80f;
+	// "窗口沾了点桌面颜色"而不是"窗口被染色".
+	//
+	// 两个主题分别定值而不共用一个数, 是因为色度余量差得远: 浅色 tint 243 只剩
+	// 12/255 的正向余量, 主通道很快顶到 255 被截住, 倍率得给足才透得出颜色; 深色
+	// tint 32 正向余量几乎满格, 同样倍率下颜色会浓得多. 现值经实机比对校准.
+	saturation = dark ? 0.70f : 0.80f;
 
 	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
 		noiseAlphaPct = userNoise * 100.0f;
@@ -648,7 +651,7 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		//   主题   | tint RGBA              | blur visible | saturation | noiseAlphaPct | uniformBright
 		//   -------|------------------------|--------------|------------|---------------|--------------
 		//   浅色   | (243,243,243,128)      | 35%          | 0.80       | 1%            | TRUE
-		//   深色   | (32, 32, 32, 217)      | 22%          | 0.55       | 2.1%          | TRUE
+		//   深色   | (32, 32, 32, 217)      | 22%          | 0.70       | 2.1%          | TRUE
 		//
 		// 亮度锁定下 blur visible × saturation 是同一个量的两个因子 (见
 		// XBlur_ResolveDcompEffectArgs): 桌面色度搬过来的总倍率 = 两者相乘,
