@@ -12,21 +12,11 @@
 // 链路 (从下到上):
 //   backdrop (CompositionBackdropBrush)
 //     → GaussianBlur (stdDev=30)
-//     → BlendEffect(Luminosity 语义) 与 luminosity 纯色混合 [可关 = 亮度锁定]
 //     → ColorMatrix(Saturation, Rec.709 luma)
-//     → Opacity (= 1 - tint 层不透明度, 即 backdrop 层可见度)
-//     → Composite SOURCE_OVER over tint ColorBrush (不透明底)
+//     → ColorMatrix(LuminosityReplace, STRAIGHT alpha) [可关]
+//     → Opacity (= 1 - tintAlpha/255, blur 的可见度)
+//     → Composite SOURCE_OVER over tint ColorBrush
 //     → [可选] Noise PNG → BorderEffect WRAP → Opacity (3%) → BlendEffect MULTIPLY
-//
-// 配色算法 (对齐 WinUI AcrylicBrush 19H1+ 配方, 见 ResolveAcrylicRecipe):
-//   "剔除黑白灰"靠 *真* Luminosity 混合完成 — 亮度取自 luminosity 纯色, 色度留给
-//   桌面. 关键点是 tint 层强度与亮度锁定强度是 *两个独立通道*: 亮度锁定可以很强
-//   (深浅主题下都不出现大面积黑/白/灰割裂), 同时 tint 层保持较低不透明度, 桌面
-//   色度得以大比例透出 = Win11 开始菜单那种"通透"观感.
-//     旧实现把两者绑成同一个 blurOpacity, 且用加性 ColorMatrix 近似 Luminosity,
-//   结果是: 色度被整体乘上一个很小的系数 (发淡), 且矩阵结果逐通道 clamp 到 8bpc
-//   中间缓冲上限后色相被拉偏 (偏色). 现在改用 D2D BlendEffect, 其 SetLum/ClipColor
-//   出界时按亮度整体收敛色度, 保色相.
 //
 // 已踩坑 (PoC 阶段):
 //   1. D2D effect GUID 必须从 d2d1effects.h 字字核对, 别凭印象 (Saturation, Blend
@@ -38,9 +28,6 @@
 //   6. Win2D Turbulence 不在 WUC 桥白名单 → CPU 撒白噪声 + D2D Bitmap.
 //   7. CompositionSurfaceBrush 默认 BitmapInterpolationMode=Linear, 噪声会糊成
 //      色斑, 必须 NearestNeighbor.
-//   8. WinUI 源码注明 Win2D BlendEffectMode 的 Color / Luminosity 命名对调过.
-//      本机实测 D2D 侧符合规范, 但仍不写死枚举 — 由
-//      DetectLuminosityBlendMode_Locked 运行时实测, 选错的视觉代价太大.
 // =============================================================================
 
 #include "module_xcgui_blur_dcomp.h"
@@ -507,191 +494,6 @@ static bool EnsureSharedD3D_Locked() {
     return SUCCEEDED(hr);
 }
 
-// ---------------------------------------------------------------------------
-// 挑出"亮度取 foreground, 色度留给 background"那一档混合模式.
-//
-// 按 W3C / PDF 规范这是 LUMINOSITY, 本机 (Win11 26100) 实测 D2D 也确实如此:
-//   backdrop=纯蓝 + foreground=中灰 → mode 23 得 (112,112,255), mode 22 得灰.
-// 但 WinUI AcrylicBrush 源码注明它用的 Win2D BlendEffectMode 里 Color / Luminosity
-// 两个名字是对调的, 说明这层命名历史上出过错. 一旦选错, 窗口会变成"桌面亮度灰度
-// 图 + tint 色度", 正好是本模块要消灭的割裂感, 所以不写死, 运行时实测一次并缓存.
-//
-// 判据: Background = 饱和蓝, Foreground = 不透明中灰.
-//   Luminosity 语义 → 亮度换成中灰, 色度仍来自 backdrop → 输出明显偏蓝 (极差大)
-//   Color 语义      → 色度来自 foreground 的灰 = 无色 → 输出灰 (极差 ≈ 0)
-// 探测失败 (D2D 资源建不出来) 回退规范值 LUMINOSITY.
-//
-// 调用方须持 g_sharedMutex 且已 EnsureSharedD3D_Locked.
-// ---------------------------------------------------------------------------
-static UINT DetectLuminosityBlendMode_Locked() {
-    static int sCached = -1;
-    if (sCached >= 0) return (UINT)sCached;
-
-    UINT picked = (UINT)D2D1_BLEND_MODE_LUMINOSITY;
-    com_ptr<ID2D1DeviceContext> ctx;
-    if (g_shared.d2dDevice &&
-        SUCCEEDED(g_shared.d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, ctx.put())))
-    {
-        // B8G8R8A8 内存序 B,G,R,A → uint32 (小端) 为 0xAARRGGBB.
-        const uint32_t kBackdropBlue = 0xFF0000FFu;
-        const uint32_t kForegroundGray = 0xFF808080u;
-
-        D2D1_BITMAP_PROPERTIES1 props{};
-        props.pixelFormat = { DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED };
-        props.dpiX = 96.0f;
-        props.dpiY = 96.0f;
-
-        com_ptr<ID2D1Bitmap1> bg, fg, target, staging;
-        HRESULT hr = ctx->CreateBitmap(D2D1::SizeU(1, 1), &kBackdropBlue, 4, props, bg.put());
-        if (SUCCEEDED(hr)) hr = ctx->CreateBitmap(D2D1::SizeU(1, 1), &kForegroundGray, 4, props, fg.put());
-
-        D2D1_BITMAP_PROPERTIES1 targetProps = props;
-        targetProps.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
-        if (SUCCEEDED(hr)) hr = ctx->CreateBitmap(D2D1::SizeU(1, 1), nullptr, 0, targetProps, target.put());
-
-        D2D1_BITMAP_PROPERTIES1 stagingProps = props;
-        stagingProps.bitmapOptions = D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
-        if (SUCCEEDED(hr)) hr = ctx->CreateBitmap(D2D1::SizeU(1, 1), nullptr, 0, stagingProps, staging.put());
-
-        // 用本文件核对过的 kBlendGuid, 不用 SDK 的 CLSID_D2D1Blend 符号 —— 后者要额外
-        // 链 dxguid.lib, 会给使用方增加链接依赖.
-        com_ptr<ID2D1Effect> blend;
-        if (SUCCEEDED(hr)) hr = ctx->CreateEffect(kBlendGuid, blend.put());
-        if (SUCCEEDED(hr)) {
-            blend->SetInput(0, bg.get());
-            blend->SetInput(1, fg.get());
-            hr = blend->SetValue(D2D1_BLEND_PROP_MODE, (UINT32)D2D1_BLEND_MODE_COLOR);
-        }
-        if (SUCCEEDED(hr)) {
-            ctx->SetTarget(target.get());
-            ctx->BeginDraw();
-            ctx->Clear(D2D1::ColorF(0, 0, 0, 0));
-            ctx->DrawImage(blend.get());
-            hr = ctx->EndDraw();
-            ctx->SetTarget(nullptr);
-        }
-        if (SUCCEEDED(hr)) hr = staging->CopyFromBitmap(nullptr, target.get(), nullptr);
-
-        D2D1_MAPPED_RECT mapped{};
-        if (SUCCEEDED(hr) && SUCCEEDED(staging->Map(D2D1_MAP_OPTIONS_READ, &mapped)) && mapped.bits) {
-            int b = mapped.bits[0], g = mapped.bits[1], r = mapped.bits[2];
-            staging->Unmap();
-            int mx = (r > g) ? r : g; if (b > mx) mx = b;
-            int mn = (r < g) ? r : g; if (b < mn) mn = b;
-            // 实测极差: 符合 Luminosity 语义时 143 (= SetLum+ClipColor 理论值), 否则 0.
-            picked = (mx - mn > 38) ? (UINT)D2D1_BLEND_MODE_COLOR
-                                    : (UINT)D2D1_BLEND_MODE_LUMINOSITY;
-        }
-    }
-    sCached = (int)picked;
-    return picked;
-}
-
-// ---------------------------------------------------------------------------
-// Win11 acrylic 配色推导 — 把对外单参数 blurOpacity ("通透感") 折算成 WinUI
-// AcrylicBrush 的两个内部通道: tint 层不透明度 + luminosity 混合色 (含 alpha).
-// 算法与 WinUI GetTintOpacityModifier / GetLuminosityColor 一致, 常量同源.
-// ---------------------------------------------------------------------------
-struct AcrylicRecipe {
-    float tintAlpha;   // tint 纯色层 SOURCE_OVER 不透明度 0..1
-    float lumiR, lumiG, lumiB;  // luminosity 混合色 (straight, 0..1)
-    float lumiA;       // 亮度锁定强度 0..1
-};
-
-static float XBlurDComp_Clamp01(float v) {
-    if (v < 0.0f) return 0.0f;
-    if (v > 1.0f) return 1.0f;
-    return v;
-}
-
-// HSV: V = max 通道, S = (max-min)/max. 与 WinUI ColorConversion 同定义.
-static void XBlurDComp_RgbToHsv(float r, float g, float b, float& h, float& s, float& v) {
-    float mx = (r > g) ? r : g; if (b > mx) mx = b;
-    float mn = (r < g) ? r : g; if (b < mn) mn = b;
-    float d = mx - mn;
-    v = mx;
-    s = (mx <= 0.0f) ? 0.0f : (d / mx);
-    if (d <= 0.0f) { h = 0.0f; return; }
-    if      (mx == r) h = (g - b) / d;
-    else if (mx == g) h = (b - r) / d + 2.0f;
-    else              h = (r - g) / d + 4.0f;
-    h *= 60.0f;
-    if (h < 0.0f) h += 360.0f;
-}
-
-static void XBlurDComp_HsvToRgb(float h, float s, float v, float& r, float& g, float& b) {
-    if (s <= 0.0f) { r = g = b = v; return; }
-    float hh = h / 60.0f;
-    int   sector = (int)hh;
-    float f = hh - (float)sector;
-    float p = v * (1.0f - s);
-    float q = v * (1.0f - s * f);
-    float t = v * (1.0f - s * (1.0f - f));
-    switch (sector % 6) {
-    case 0:  r = v; g = t; b = p; break;
-    case 1:  r = q; g = v; b = p; break;
-    case 2:  r = p; g = v; b = t; break;
-    case 3:  r = p; g = q; b = v; break;
-    case 4:  r = t; g = p; b = v; break;
-    default: r = v; g = p; b = q; break;
-    }
-}
-
-// WinUI GetTintOpacityModifier: 按 tint 明度压制 tint 层最大不透明度 —
-// 纯白 45%, 中灰 90%, 纯黑 85%, 饱和度越高压制越弱. 这条曲线是浅色主题"通透"
-// 而深色主题"厚实"的来源: 近白 tint 只能盖住四成多, 桌面色度自然透出来.
-static float XBlurDComp_TintOpacityModifier(float hsvV, float hsvS) {
-    const float kMidPoint = 0.50f;
-    const float kWhiteMaxOpacity = 0.45f;
-    const float kMidPointMaxOpacity = 0.90f;
-    const float kBlackMaxOpacity = 0.85f;
-
-    if (hsvV == kMidPoint) return kMidPointMaxOpacity;
-
-    float lowestMaxOpacity = (hsvV > kMidPoint) ? kWhiteMaxOpacity : kBlackMaxOpacity;
-    float maxDeviation     = (hsvV > kMidPoint) ? (1.0f - kMidPoint) : kMidPoint;
-    float maxSuppression   = kMidPointMaxOpacity - lowestMaxOpacity;
-    if (hsvS > 0.0f) {
-        float damp = 1.0f - hsvS * 2.0f;
-        maxSuppression *= (damp > 0.0f) ? damp : 0.0f;
-    }
-    float deviation = (hsvV > kMidPoint) ? (hsvV - kMidPoint) : (kMidPoint - hsvV);
-    return kMidPointMaxOpacity - maxSuppression * (deviation / maxDeviation);
-}
-
-static AcrylicRecipe ResolveAcrylicRecipe(int tintR, int tintG, int tintB, float blurOpacity) {
-    float visibility  = XBlurDComp_Clamp01(blurOpacity);  // 对外"通透感"
-    float tintOpacity = 1.0f - visibility;                // tint 层主导度
-
-    float r = tintR / 255.0f, g = tintG / 255.0f, b = tintB / 255.0f;
-    float h = 0.0f, s = 0.0f, v = 0.0f;
-    XBlurDComp_RgbToHsv(r, g, b, h, s, v);
-
-    float modifier = XBlurDComp_TintOpacityModifier(v, s);
-    // 通透感取 0 时接口语义是"完全不通透 = 纯 tint", Win11 压制曲线会让近白 tint
-    // 停在四成多, 与该语义冲突. 只在 0 附近线性放开压制, 保住端点又不产生跳变.
-    const float kNoSuppressRamp = 0.08f;
-    if (visibility < kNoSuppressRamp) {
-        float t = visibility / kNoSuppressRamp;
-        modifier = 1.0f + (modifier - 1.0f) * t;
-    }
-
-    AcrylicRecipe out{};
-    out.tintAlpha = XBlurDComp_Clamp01(tintOpacity * modifier);
-
-    // luminosity 混合色: 取 tint 的色相/饱和度, 明度夹到 [0.125, 0.965] —
-    // 避免纯白/纯黑 tint 把 backdrop 亮度压成死白 / 死黑而彻底吃掉层次.
-    float lumiV = v;
-    if (lumiV < 0.125f) lumiV = 0.125f;
-    if (lumiV > 0.965f) lumiV = 0.965f;
-    XBlurDComp_HsvToRgb(h, s, lumiV, out.lumiR, out.lumiG, out.lumiB);
-
-    // 亮度锁定强度由 tintOpacity 线性映射到 [0.15, 1.03] 后夹 1 (WinUI 同映射):
-    // tint 越主导, 亮度越彻底交给 tint, 桌面明暗起伏残留越少.
-    out.lumiA = XBlurDComp_Clamp01(0.15f + tintOpacity * (1.03f - 0.15f));
-    return out;
-}
-
 static const DWORD kXBlurDcomp_DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 static const DWORD kDWMWCP_DONOTROUND            = 1;
 static const DWORD kDWMWCP_ROUND                   = 2;
@@ -793,24 +595,19 @@ static void GetClientRectInset(HWND host, int inset, float& w, float& h) {
 
 // 创建完整 effect chain, 返回 root effect (可拿去做 EffectFactory).
 // 根据 useLuminosity / noiseAlphaPct 决定是否插入对应层.
-//
-// blurLayerOpacity = 1 - tint 层不透明度. 这里保留"不透明 tint 作 Composite 底 +
-// backdrop 层带 alpha 叠上去"的方向 (与 WinUI"半透 tint 叠在不透明 backdrop 层上"
-// 代数等价), 因为不透明底能保证输出 alpha 恒为 1 — GaussianBlur SOFT 边缘的 alpha
-// 衰减不会漏成半透窗边.
 static WGE::IGraphicsEffect BuildEffectChain(
     bool  useLuminosity,
-    UINT  luminosityBlendMode,
+    int   tintR, int tintG, int tintB,
     float saturation,
-    float blurLayerOpacity,
+    float blurOpacity,
     float noiseAlphaPct,
-    /*out*/ winrt::com_ptr<BlendEffectImpl>&       outLumiBlend,
     /*out*/ winrt::com_ptr<ColorMatrixEffectImpl>& outSat,
+    /*out*/ winrt::com_ptr<ColorMatrixEffectImpl>& outLumi,
     /*out*/ winrt::com_ptr<OpacityEffectImpl>&     outOpacity,
     /*out*/ winrt::com_ptr<CompositeEffectImpl>&   outComposite,
     /*out*/ winrt::com_ptr<BorderEffectImpl>&      outBorder,
     /*out*/ winrt::com_ptr<OpacityEffectImpl>&     outNoiseOpacity,
-    /*out*/ winrt::com_ptr<BlendEffectImpl>&       outNoiseBlend)
+    /*out*/ winrt::com_ptr<BlendEffectImpl>&       outBlend)
 {
     auto backdropParam = WUC::CompositionEffectSourceParameter(L"backdrop");
     auto tintParam     = WUC::CompositionEffectSourceParameter(L"tint");
@@ -819,24 +616,7 @@ static WGE::IGraphicsEffect BuildEffectChain(
     blurFx->StandardDeviation(30.0f);
     blurFx->Source(backdropParam);
 
-    WGE::IGraphicsEffectSource backdropLayer = blurFx.as<WGE::IGraphicsEffectSource>();
-
-    // 亮度锁定 = 真 Luminosity 混合: 亮度取 luminosity 纯色 (强度写在该色 alpha 上),
-    // 色度留给桌面. 出界色由 D2D 的 ClipColor 按亮度整体收敛, 不会像加性矩阵那样
-    // 逐通道 clamp 出偏色.
-    if (useLuminosity) {
-        auto lumiParam = WUC::CompositionEffectSourceParameter(L"luminosity");
-        outLumiBlend = winrt::make_self<BlendEffectImpl>();
-        outLumiBlend->Name(L"LuminosityBlend");
-        outLumiBlend->Mode(luminosityBlendMode);
-        outLumiBlend->Background(backdropLayer);
-        outLumiBlend->Foreground(lumiParam);
-        backdropLayer = outLumiBlend.as<WGE::IGraphicsEffectSource>();
-    }
-
-    // Saturation: ColorMatrix v*M, Rec.709 luma. 放在亮度锁定 *之后* —
-    // 此时色度已被压到 tint 亮度附近, 提饱和不会撞 8bpc 中间缓冲上限;
-    // 放在 blur 之后会先被 clamp 掉一部分, 提亮饱和反而丢色相.
+    // Saturation: ColorMatrix v*M, Rec.709 luma.
     constexpr float Lr = 0.2126f, Lg = 0.7152f, Lb = 0.0722f;
     float inv = 1.0f - saturation;
     float satMat[20] = {
@@ -849,12 +629,30 @@ static WGE::IGraphicsEffect BuildEffectChain(
     outSat = winrt::make_self<ColorMatrixEffectImpl>();
     outSat->Name(L"SaturationMatrix");
     outSat->SetMatrix(satMat);
-    outSat->Source(backdropLayer);
+    outSat->Source(blurFx.as<WGE::IGraphicsEffectSource>());
+
+    WGE::IGraphicsEffectSource lumiSrc = outSat.as<WGE::IGraphicsEffectSource>();
+    if (useLuminosity) {
+        float L_tint = (Lr*tintR + Lg*tintG + Lb*tintB) / 255.0f;
+        float lumiMat[20] = {
+            1.0f - Lr,  -Lr,         -Lr,         0,
+            -Lg,         1.0f - Lg,  -Lg,         0,
+            -Lb,         -Lb,         1.0f - Lb,  0,
+            0,           0,           0,           1,
+            L_tint,      L_tint,      L_tint,      0
+        };
+        outLumi = winrt::make_self<ColorMatrixEffectImpl>();
+        outLumi->Name(L"LuminosityMatrix");
+        outLumi->SetMatrix(lumiMat);
+        outLumi->SetAlphaMode(2);  // STRAIGHT
+        outLumi->Source(outSat.as<WGE::IGraphicsEffectSource>());
+        lumiSrc = outLumi.as<WGE::IGraphicsEffectSource>();
+    }
 
     outOpacity = winrt::make_self<OpacityEffectImpl>();
     outOpacity->Name(L"BlurOpacity");
-    outOpacity->Opacity(blurLayerOpacity);
-    outOpacity->Source(outSat.as<WGE::IGraphicsEffectSource>());
+    outOpacity->Opacity(blurOpacity);
+    outOpacity->Source(lumiSrc);
 
     outComposite = winrt::make_self<CompositeEffectImpl>();
     outComposite->Name(L"TintComposite");
@@ -877,12 +675,12 @@ static WGE::IGraphicsEffect BuildEffectChain(
         outNoiseOpacity->Opacity(noiseAlphaPct / 100.0f);
         outNoiseOpacity->Source(outBorder.as<WGE::IGraphicsEffectSource>());
 
-        outNoiseBlend = winrt::make_self<BlendEffectImpl>();
-        outNoiseBlend->Name(L"NoiseBlend");
-        outNoiseBlend->Mode((UINT)D2D1_BLEND_MODE_MULTIPLY);
-        outNoiseBlend->Foreground(outNoiseOpacity.as<WGE::IGraphicsEffectSource>());
-        outNoiseBlend->Background(outComposite.as<WGE::IGraphicsEffectSource>());
-        finalRoot = outNoiseBlend.as<WGE::IGraphicsEffect>();
+        outBlend = winrt::make_self<BlendEffectImpl>();
+        outBlend->Name(L"NoiseBlend");
+        outBlend->Mode(0);  // MULTIPLY
+        outBlend->Foreground(outNoiseOpacity.as<WGE::IGraphicsEffectSource>());
+        outBlend->Background(outComposite.as<WGE::IGraphicsEffectSource>());
+        finalRoot = outBlend.as<WGE::IGraphicsEffect>();
     }
 
     return finalRoot;
@@ -970,25 +768,19 @@ bool Apply(HWND host,
             return false;
         }
 
-        // 通透感 → tint 层不透明度 + 亮度锁定强度 (两个独立通道, 见 ResolveAcrylicRecipe).
-        AcrylicRecipe recipe = ResolveAcrylicRecipe(tintR, tintG, tintB, blurOpacity);
-        bool useLuminosity = (uniformBrightness != FALSE);
-        UINT lumiMode = useLuminosity ? DetectLuminosityBlendMode_Locked()
-                                      : (UINT)D2D1_BLEND_MODE_COLOR;
-
         // 重建 effect chain (反映新参数).
-        winrt::com_ptr<ColorMatrixEffectImpl> sat;
+        winrt::com_ptr<ColorMatrixEffectImpl> sat, lumi;
         winrt::com_ptr<OpacityEffectImpl>     blurOp, noiseOp;
         winrt::com_ptr<CompositeEffectImpl>   composite;
         winrt::com_ptr<BorderEffectImpl>      border;
-        winrt::com_ptr<BlendEffectImpl>       lumiBlend, noiseBlend;
+        winrt::com_ptr<BlendEffectImpl>       blend;
         auto root = BuildEffectChain(
-            useLuminosity,
-            lumiMode,
+            uniformBrightness ? true : false,
+            tintR, tintG, tintB,
             saturation,
-            1.0f - recipe.tintAlpha,
+            blurOpacity,
             noiseAlphaPct,
-            lumiBlend, sat, blurOp, composite, border, noiseOp, noiseBlend);
+            sat, lumi, blurOp, composite, border, noiseOp, blend);
 
         auto factory = s.compositor.CreateEffectFactory(root);
         auto effectBrush = factory.CreateBrush();
@@ -996,24 +788,10 @@ bool Apply(HWND host,
         auto backdrop = s.compositor.CreateBackdropBrush();
         effectBrush.SetSourceParameter(L"backdrop", backdrop);
 
-        // tint 作 Composite 不透明底 (alpha=255), 可见比例由 backdrop 层的
-        // OpacityEffect(1 - tintAlpha) 决定.
+        // tint 当作 Solid 顶层不透明 (alpha=255), 透明度由 OpacityEffect 控制.
         auto tintBrush = s.compositor.CreateColorBrush(
             winrt::Windows::UI::Color{ 255, (uint8_t)tintR, (uint8_t)tintG, (uint8_t)tintB });
         effectBrush.SetSourceParameter(L"tint", tintBrush);
-
-        if (useLuminosity) {
-            auto toByte = [](float v) -> uint8_t {
-                int i = (int)(v * 255.0f + 0.5f);
-                if (i < 0)   i = 0;
-                if (i > 255) i = 255;
-                return (uint8_t)i;
-            };
-            auto lumiBrush = s.compositor.CreateColorBrush(
-                winrt::Windows::UI::Color{ toByte(recipe.lumiA), toByte(recipe.lumiR),
-                                           toByte(recipe.lumiG), toByte(recipe.lumiB) });
-            effectBrush.SetSourceParameter(L"luminosity", lumiBrush);
-        }
 
         if (noiseAlphaPct > 0.001f) {
             auto noiseBrush = GetOrCreateNoiseBrush(s);

@@ -2659,14 +2659,12 @@ public:
 //@别名  取噪点()
 	float GetNoise() const;
 
-//@备注 启用 / 关闭"亮度锁定" (Luminosity 混合). 仅 *dcomp 路径* (Win10 1803+ 走
+//@备注 启用 / 关闭"亮度锁定" (LuminosityBlend). 仅 *dcomp 路径* (Win10 1803+ 走
 //      Windows.UI.Composition 直接合成时) 生效, 老路径 (ACCENT / DWM) 调用本接口
 //      被静默忽略.
 //
 //      启用时 (默认 TRUE): 不论桌面背景深浅, 窗口都保持 tint 自身亮度,
-//        只透出色相变化 — 即"剔除黑白灰": 桌面上的大面积黑 / 白 / 灰色块不会
-//        把窗口拖成深浅不一的斑块, 彩色部分照常透出. 这是 Win11 Start Menu /
-//        Settings 标准观感. 锁定强度由 SetBlurOpacity 一起推导, 不需要单独调.
+//        只透出色相变化. 这是 Win11 Start Menu / Settings 标准观感.
 //      关闭时 (FALSE): blur 亮度跟桌面同步起伏 (Win10 Aero / 老 acrylic 风),
 //        视觉更"通透"但深背景下窗会变暗.
 //
@@ -2677,23 +2675,16 @@ public:
 //@别名  取亮度锁定()
 	BOOL GetUniformBrightness() const;
 
-//@备注 设置"模糊层通透感" — 控制窗口后方桌面透出的程度.
+//@备注 设置"模糊层通透感" — 控制 blur 通道相对 tint 的显示比例.
 //      *仅 dcomp 路径生效* (Win10 1803+ 走 Windows.UI.Composition 自合成路径时).
 //      老路径 (ACCENT_ACRYLIC / DWM_TRANSIENT / BLURBEHIND / DECORATIVE) 上调用
 //      被静默忽略 (那些路径用 SetTintColor 的 alpha 控制等价行为).
 //
-//      不是简单的"tint / blur 各占几成": 内部按 Win11 (WinUI AcrylicBrush) 配方
-//      把该值拆成 *两个独立通道* —— tint 纯色层不透明度, 以及亮度锁定强度.
-//      亮度锁定始终保持较高, 所以调大通透感透出来的主要是桌面 *色度*, 亮度仍由
-//      tint 统一; 不会因为桌面有大块黑 / 白 / 灰而出现割裂色块.
-//      tint 层不透明度还会按 Win11 明度曲线压制 (近白 tint 最高约四成半, 近黑
-//      tint 最高约八成半), 这是浅色主题看起来通透、深色主题看起来厚实的原因.
-//
 //      取值范围 0.0 ~ 1.0:
-//        0.0  完全不通透 — 仅 tint 颜色 (此档不做明度压制, 保证纯色)
-//        0.15 深色主题默认 — tint 层 ~73%, 亮度锁定 0.90
-//        0.20 浅色主题默认 — tint 层 ~39%, 亮度锁定 0.85 (Win11 开始菜单浅色)
-//        1.0  完全通透 — 仅桌面模糊, 看不到 tint 也不锁亮度 (有点像玻璃)
+//        0.0  完全不通透 — 仅 tint 颜色, 看不到背景 blur
+//        0.15 PoC dark 默认 — tint 主导 85%, 背景隐约透出 15% (Win11 Start Menu 深色)
+//        0.5  PoC light 默认 — tint / blur 各半 (Win11 Start Menu 浅色)
+//        1.0  完全通透 — 仅 blur, 看不到 tint (有点像玻璃)
 //
 //      传 *负值* (例如 -1) → 还原为"按主题默认 + tintA 反算" (默认状态).
 //

@@ -45,15 +45,11 @@ bool IsSupported();
 //   tintR, tintG, tintB : tint 色 0..255 (XCGUI RGBA 分量已解出来)
 //   tintA               : tint 不透明度 0..255. 仅 blurOpacity<0 时用 (反算
 //                         blurOpacity=1-tintA/255). 若 blurOpacity>=0 忽略 tintA.
-//   blurOpacity         : 桌面通道可见度 0..1 (= "通透感"). <0 表示"按 tintA 反算
-//                         或主题默认". 越小 tint 越主导, 越大桌面越透出.
-//                         内部按 WinUI AcrylicBrush 配方折算成两个通道:
-//                           tint 层不透明度 = (1-blurOpacity) * Win11 明度压制系数
-//                           亮度锁定强度   = 0.15 + (1-blurOpacity) * 0.88 (夹 1)
-//                         所以同一个值下亮度足够统一 (不割裂), 色度仍大比例透出.
-//                         推荐 light 0.2, dark 0.15; 0 = 纯 tint, 1 = 纯桌面.
-//   saturation          : 色彩饱和度 1.0=不变, 1.2~1.5 推荐. 作用在亮度锁定之后
-//   uniformBrightness   : 1=锁定亮度 (真 Luminosity 混合, Win11 Start Menu 风),
+//   blurOpacity         : blur 通道可见度 0..1 (= "通透感"). <0 表示"按 tintA 反算
+//                         或主题默认". 越小 tint 越主导, 越大桌面 blur 越透出.
+//                         PoC light=0.5, dark=0.15.
+//   saturation          : 色彩饱和度 1.0=不变, 1.2~1.5 推荐, 配合 lumi 使用
+//   uniformBrightness   : 1=锁定亮度 (LuminosityBlend, Win11 Start Menu 风),
 //                         0=亮度跟桌面起伏 (老式 Aero acrylic 风)
 //   noiseAlphaPct       : 噪声 alpha 百分比 0..100. 0=关. Win11 标准 1~3%.
 //                         用 BlendEffect.MULTIPLY 跟 blur+tint 合成.

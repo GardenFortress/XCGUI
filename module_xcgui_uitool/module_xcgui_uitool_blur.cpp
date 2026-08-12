@@ -283,13 +283,8 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 		else     { tintR = 243; tintG = 243; tintB = 243; tintA = 255; }
 	}
 
-	// 通透感默认值按新配方 (dcomp 内部 ResolveAcrylicRecipe) 重新校准:
-	//   light 0.20 → tint 层 ~39% + 亮度锁定 0.85
-	//   dark  0.15 → tint 层 ~73% + 亮度锁定 0.90
-	// 两者的亮度锁定都在 0.85 以上, 深浅主题下都不会被桌面大面积明暗拖出割裂感;
-	// tint 层不占满, 桌面色度才透得出来 = Win11 开始菜单观感.
 	blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
-	                                        : (dark ? 0.15f : 0.20f);
+	                                        : (dark ? 0.22f : 0.35f);
 	saturation = dark ? 1.2f : 1.3f;
 
 	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
@@ -632,18 +627,18 @@ static void XBlur_ApplyHostBlur_Locked(HWND host){
 		// 处理, *不* 在 element 端再叠一层.
 		//
 		// ---------------------------------------------------------------------
-		// 默认值 (跟 Win11 Start Menu 对齐, 见 XBlur_ResolveDcompEffectArgs):
+		// 默认值 (PoC 经多轮视觉比对 + 用户 review 校准, 跟 Win11 Start Menu 对齐):
 		//
-		//   主题   | tint RGB        | 通透感 | saturation | noiseAlphaPct | uniformBright
-		//   -------|-----------------|--------|------------|---------------|--------------
-		//   浅色   | (243,243,243)   | 0.20   | 1.3        | 1%            | TRUE
-		//   深色   | (32, 32, 32)    | 0.15   | 1.2        | 3%            | TRUE
+		//   主题   | tint RGBA              | blur visible | saturation | noiseAlphaPct | uniformBright
+		//   -------|------------------------|--------------|------------|---------------|--------------
+		//   浅色   | (243,243,243,128)      | 50%          | 1.3        | 1%            | TRUE
+		//   深色   | (32, 32, 32, 217)      | 15%          | 1.2        | 3%            | TRUE
 		//
-		// 通透感不是"tint / blur 二选一的比例", dcomp 内部按 WinUI AcrylicBrush
-		// 配方拆成 tint 层不透明度 + 亮度锁定强度两个通道: 亮度统一由亮度锁定负责
-		// (深色主题不会被桌面亮度顶穿), tint 层则不占满, 让桌面色度透出来.
-		// blurOpacity < 0 (用户没设过) 时才按 tint.A 反算 (1 - A/255), 与
-		// ACCENT_ACRYLIC GradientColor.A 语义保持兼容.
+		// tint.A 语义跟 ACCENT_ACRYLIC GradientColor.A 一致:
+		//   A=255 完全 tint (看不到 blur); A=0 完全 blur (看不到 tint).
+		//   dcomp 内部计算 blurOpacity = 1 - A/255, 喂给 OpacityEffect.
+		//   所以 dark 主题 A=217 表示 *tint 主导 85% / blur 透出 15%* — 深色
+		//   acrylic 里 tint 必须很强, 否则桌面亮度直接透过来 (用户截图症状).
 		//
 		// 取值策略 (按字段):
 		//   tint           : 用户 SetTintColor 传非 0 → 用用户值; m_tintColor==0
