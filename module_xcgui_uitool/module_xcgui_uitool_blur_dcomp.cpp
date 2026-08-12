@@ -30,7 +30,7 @@
 //      色斑, 必须 NearestNeighbor.
 // =============================================================================
 
-#include "module_xcgui_blur_dcomp.h"
+#include "xcgui_blur_dcomp.h"
 
 // 独立编译时前向声明; uitool 聚合 TU 内 module_xcgui.h 已定义 HWINDOW.
 #ifndef XCGUI_H

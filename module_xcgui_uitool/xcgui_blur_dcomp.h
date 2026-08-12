@@ -1,5 +1,5 @@
 ﻿// =============================================================================
-// module_xcgui_blur_dcomp.h — Win10 1803+ 直接走 DComp + Windows.UI.Composition
+// xcgui_blur_dcomp.h — Win10 1803+ 直接走 DComp + Windows.UI.Composition
 // 实现真正的 Win11 acrylic (Blur + Saturation + LuminosityBlend + Noise),
 // 不再受 ACCENT_POLICY 在不同 OS 上的退化影响.
 //

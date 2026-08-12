@@ -39,7 +39,7 @@
 //============================================================================
 
 #include "module_xcgui_blur.h"
-#include "module_xcgui_blur_dcomp.h"  // Win10 1803+ dcomp+WUC 直接合成路径 (XBLUR_PATH_DCOMP_WINRT)
+#include "xcgui_blur_dcomp.h"  // Win10 1803+ dcomp+WUC 直接合成路径 (XBLUR_PATH_DCOMP_WINRT)
 
 #include <dwmapi.h>
 #include <algorithm>

@@ -47,7 +47,7 @@
 // CXShadow 全局状态 — InitOnce 延迟初始化 + SRWLOCK (不用 std::mutex 静态对象).
 // MSVC 下文件作用域 std::mutex 在模块/聚合 TU 链接时 lock 会 0xC0000005.
 //============================================================================
-#include "module_xcgui_uitool_shadow_internal.h"
+#include "xcgui_uitool_shadow_internal.h"
 
 namespace CXShadowModule {
 namespace {

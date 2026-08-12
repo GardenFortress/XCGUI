@@ -71,7 +71,7 @@ extern "C" {
 #include "module_base.h"
 #include "module_xcgui.h"
 #include "module_xcgui_class.h"
-#include "module_xcgui_media_internal.h"
+#include "xcgui_media_internal.h"
 
 //@src "module_xcgui_media.cpp"
 

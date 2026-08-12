@@ -11,7 +11,7 @@
 #error "module_xcgui_uitool_shadow.inc must be included from module_xcgui_uitool.cpp only"
 #endif
 
-#include "module_xcgui_uitool_shadow_internal.h"
+#include "xcgui_uitool_shadow_internal.h"
 
 #include <algorithm>
 #include <cmath>
