@@ -686,6 +686,10 @@ HELE CXEditDW::Create(int x, int y, int cx, int cy, HXCGUI hParent){
 	XEle_EnableEvent_XE_PAINT_END(m_hEle, TRUE);
 	// 按 m_bkColor / m_borderColor / m_focusBorderColor 装上默认 BkInfo (白底 + 灰边框 + 焦点蓝边框).
 	RebuildBkInfo();
+	// 复用同一 CXEditDW 再次 Create 时, 新 HELE 默认 EnableDrawBorder=TRUE 且焦点边框
+	// 为 #58B1FC. m_drawBorder 可能已是 FALSE, 必须把策略重新落到新句柄.
+	m_focusBorderSaved = false;
+	ApplyDrawBorderToEle();
 	InstallEvents();
 	return m_hEle;
 }
@@ -3681,38 +3685,30 @@ void CXEditDW::RebuildBkInfo(){
 	RedrawSelf();
 }
 
-void CXEditDW::EnableDrawBorderEx(BOOL bEnable){
+void CXEditDW::ApplyDrawBorderToEle(){
 	if (!m_hEle) return;
-	bool newState = (bEnable != FALSE);
-	if (newState == m_drawBorder){
-		return;   // 状态未变跳过, 避免无效 ClearBkInfo + 重绘 / 反复缓存 focus border.
-	}
-
-	// 透传给 XCGUI 默认边框开关, 让基类查询 (例如其他代码读 XEle_IsDrawFocus 之类) 也一致.
-	// 注意: XEle_EnableDrawBorder 只关 XCGUI *默认隐含边框*, 不影响 BkInfo 边框, 也不影响
-	// *XCGUI 内置焦点边框* (XEle_SetFocusBorderColor 系统). 后者实测画了一条 #58B1FC 的
-	// 蓝边 (XCGUI 默认主题色), 必须单独处理 - 见下面 SetFocusBorderColor 透明覆盖.
-	XEle_EnableDrawBorder(m_hEle, bEnable);
-
-	if (!newState){
-		// === 禁用: 缓存 XCGUI 内置焦点边框色, 覆盖为透明使其视觉消失. ===
-		// 仅首次禁用时缓存 (m_focusBorderSaved 防止重复 disable 时把 *透明色当原色*).
+	XEle_EnableDrawBorder(m_hEle, m_drawBorder ? TRUE : FALSE);
+	if (!m_drawBorder){
 		if (!m_focusBorderSaved){
 			m_savedXcguiFocusBorderColor = XEle_GetFocusBorderColor(m_hEle);
 			m_focusBorderSaved = true;
 		}
 		XEle_SetFocusBorderColor(m_hEle, RGBA(0, 0, 0, 0));
+	}else if (m_focusBorderSaved){
+		XEle_SetFocusBorderColor(m_hEle, m_savedXcguiFocusBorderColor);
+		m_focusBorderSaved = false;
 	}
-	else{
-		// === 启用: 从缓存恢复 XCGUI 内置焦点边框色. ===
-		if (m_focusBorderSaved){
-			XEle_SetFocusBorderColor(m_hEle, m_savedXcguiFocusBorderColor);
-			m_focusBorderSaved = false;
-		}
-	}
+}
 
+void CXEditDW::EnableDrawBorderEx(BOOL bEnable){
+	if (!m_hEle) return;
+	bool newState = (bEnable != FALSE);
+	const bool changed = (newState != m_drawBorder);
 	m_drawBorder = newState;
-	RebuildBkInfo();   // 重建 BkInfo (按 m_drawBorder 决定加不加 BkBorder), 内部已 RedrawSelf.
+	// 即使缓存状态未变也要落到当前 HELE: 第二次 Create 后新句柄仍是默认焦点蓝边.
+	ApplyDrawBorderToEle();
+	if (changed)
+		RebuildBkInfo();
 }
 
 BOOL CXEditDW::IsDrawBorderEx() const{

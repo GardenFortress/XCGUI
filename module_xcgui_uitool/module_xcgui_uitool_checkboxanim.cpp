@@ -1,6 +1,8 @@
-//============================================================================
+﻿//============================================================================
 // module_xcgui_uitool_checkboxanim.cpp — CXCheckAnim (WinUI3 风格多选框动画)
 // 仅由 module_xcgui_uitool.cpp #include; 勿单独编译.
+// 本类只负责绘制与过渡. 同一事件按注册顺序执行, 前面拦截则后面不再触发,
+// XCGUI 内置行为优先级最低; 因此除 PAINT/PAINT_END 外不得置 pbHandled.
 //============================================================================
 #ifndef _XCGUI_UITOOL_AGGREGATED_
 #else
@@ -71,9 +73,6 @@ struct _XChk_Entry
 	BOOL                  eventsHooked   = FALSE;
 	BOOL                  bHover         = FALSE;
 	BOOL                  bPressed       = FALSE;
-	BOOL                  bCapture       = FALSE;
-	BOOL                  bCheckAtPress  = FALSE;
-	BOOL                  bProgrammatic  = FALSE;
 	float                 thumbX         = 0.f;
 	float                 thumbW         = (float)kChk_ThumbNormalW;
 	COLORREF              trackColor     = 0;
@@ -432,7 +431,6 @@ void _XChk_HookEvents(HELE hBtn, _XChk_Entry& e)
 	XEle_RegEventC1(hBtn, XE_MOUSELEAVE,   (void*)&CXCheckAnim::OnMouseLeaveC);
 	XEle_RegEventC1(hBtn, XE_LBUTTONDOWN,  (void*)&CXCheckAnim::OnLButtonDownC);
 	XEle_RegEventC1(hBtn, XE_LBUTTONUP,    (void*)&CXCheckAnim::OnLButtonUpC);
-	XEle_RegEventC1(hBtn, XE_BNCLICK,       (void*)&CXCheckAnim::OnBnClickC);
 	XEle_RegEventC1(hBtn, XE_BUTTON_CHECK, (void*)&CXCheckAnim::OnButtonCheckC);
 	XEle_RegEventC1(hBtn, XE_DESTROY,      (void*)&CXCheckAnim::OnDestroyC);
 	e.eventsHooked = TRUE;
@@ -447,18 +445,9 @@ void _XChk_UnhookEvents(HELE hBtn, _XChk_Entry& e)
 	XEle_RemoveEventC(hBtn, XE_MOUSELEAVE,   (void*)&CXCheckAnim::OnMouseLeaveC);
 	XEle_RemoveEventC(hBtn, XE_LBUTTONDOWN,  (void*)&CXCheckAnim::OnLButtonDownC);
 	XEle_RemoveEventC(hBtn, XE_LBUTTONUP,    (void*)&CXCheckAnim::OnLButtonUpC);
-	XEle_RemoveEventC(hBtn, XE_BNCLICK,       (void*)&CXCheckAnim::OnBnClickC);
 	XEle_RemoveEventC(hBtn, XE_BUTTON_CHECK, (void*)&CXCheckAnim::OnButtonCheckC);
 	XEle_RemoveEventC(hBtn, XE_DESTROY,      (void*)&CXCheckAnim::OnDestroyC);
 	e.eventsHooked = FALSE;
-}
-
-BOOL _XChk_PtInClient(HELE hBtn, POINT* pPt)
-{
-	if (!pPt) return FALSE;
-	RECT rc{};
-	XEle_GetClientRect(hBtn, &rc);
-	return pPt->x >= rc.left && pPt->x < rc.right && pPt->y >= rc.top && pPt->y < rc.bottom;
 }
 
 } // namespace
@@ -488,6 +477,13 @@ int CALLBACK CXCheckAnim::OnPaintC(HELE hBtn, HDRAW hDraw, BOOL* pbHandled)
 	if (!e){ if (pbHandled) *pbHandled = FALSE; return 0; }
 	_XChk_SyncExternalTitle(*e);
 	_XChk_EnsureButtonWidth(*e);
+	if (!e->anim.active){
+		const BOOL disabled = !XEle_IsEnable(hBtn);
+		const BOOL checked  = XBtn_IsCheck(hBtn) == TRUE;
+		e->thumbX = _XChk_TargetThumbX(checked);
+		e->thumbW = _XChk_TargetThumbW(*e);
+		e->trackColor = _XChk_TargetTrack(*e, checked, disabled);
+	}
 	if (pbHandled) *pbHandled = TRUE;
 	RECT rc{};
 	XEle_GetClientRect(hBtn, &rc);
@@ -508,7 +504,7 @@ int CALLBACK CXCheckAnim::OnMouseHoverC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL
 {
 	(void)nFlags; (void)pPt; (void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
-	if (!e || e->bCapture) return 0;
+	if (!e) return 0;
 	if (e->bHover) return 0;
 	e->bHover = TRUE;
 	_XChk_RefreshVisual(*e, TRUE);
@@ -519,7 +515,7 @@ int CALLBACK CXCheckAnim::OnMouseLeaveC(HELE hBtn, BOOL* pbHandled)
 {
 	(void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
-	if (!e || e->bCapture) return 0;
+	if (!e) return 0;
 	if (!e->bHover && !e->bPressed) return 0;
 	e->bHover = FALSE;
 	if (!e->bPressed) _XChk_RefreshVisual(*e, TRUE);
@@ -528,75 +524,36 @@ int CALLBACK CXCheckAnim::OnMouseLeaveC(HELE hBtn, BOOL* pbHandled)
 
 int CALLBACK CXCheckAnim::OnLButtonDownC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled)
 {
-	(void)nFlags; (void)pPt;
+	(void)nFlags; (void)pPt; (void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
 	if (!e || !XEle_IsEnable(hBtn)) return 0;
-	if (pbHandled) *pbHandled = TRUE;
 	const BOOL bInterrupt = e->anim.active || e->anim.hAnima;
 	if (bInterrupt)
 		_XChk_StopAnim(*e, FALSE);
 	else
 		XAnima_ReleaseEx((HXCGUI)hBtn, FALSE);
-	e->bCheckAtPress = XBtn_IsCheck(hBtn) == TRUE;
 	e->bPressed = TRUE;
-	e->bCapture = TRUE;
-	XEle_SetCapture(hBtn, TRUE);
 	_XChk_RefreshVisual(*e, TRUE, bInterrupt);
 	return 0;
 }
 
 int CALLBACK CXCheckAnim::OnLButtonUpC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled)
 {
-	(void)nFlags;
+	(void)nFlags; (void)pPt; (void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
-	if (!e) return 0;
-	if (pbHandled) *pbHandled = TRUE;
-	if (!e->bPressed) return 0;
-	if (e->bCapture){
-		XEle_SetCapture(hBtn, FALSE);
-		e->bCapture = FALSE;
-	}
-	const BOOL inside = _XChk_PtInClient(hBtn, pPt);
-	const BOOL wasCheck = e->bCheckAtPress;
-	const BOOL bInterrupt = e->anim.active || e->anim.hAnima;
+	if (!e || !e->bPressed) return 0;
 	e->bPressed = FALSE;
+	const BOOL bInterrupt = e->anim.active || e->anim.hAnima;
 	if (bInterrupt) _XChk_StopAnim(*e, FALSE);
-	if (inside){
-		const BOOL want = !wasCheck;
-		e->bProgrammatic = TRUE;
-		XBtn_SetCheck(hBtn, want ? TRUE : FALSE);
-		e->bProgrammatic = FALSE;
-		_XChk_RefreshVisual(*e, TRUE, bInterrupt);
-	}else{
-		e->bProgrammatic = TRUE;
-		XBtn_SetCheck(hBtn, wasCheck ? TRUE : FALSE);
-		e->bProgrammatic = FALSE;
-		_XChk_RefreshVisual(*e, TRUE, bInterrupt);
-	}
-	return 0;
-}
-
-int CALLBACK CXCheckAnim::OnBnClickC(HELE hBtn, BOOL* pbHandled)
-{
-	_XChk_Entry* e = _XChk_Find(hBtn);
-	if (!e) return 0;
-	if (pbHandled) *pbHandled = TRUE;
+	_XChk_RefreshVisual(*e, TRUE, bInterrupt);
 	return 0;
 }
 
 int CALLBACK CXCheckAnim::OnButtonCheckC(HELE hBtn, BOOL bCheck, BOOL* pbHandled)
 {
-	(void)bCheck;
+	(void)bCheck; (void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
 	if (!e) return 0;
-	if (e->bProgrammatic) return 0;
-	if (e->bPressed){
-		if (pbHandled) *pbHandled = TRUE;
-		e->bProgrammatic = TRUE;
-		XBtn_SetCheck(hBtn, e->bCheckAtPress ? TRUE : FALSE);
-		e->bProgrammatic = FALSE;
-		return 0;
-	}
 	const BOOL bInterrupt = e->anim.active || e->anim.hAnima;
 	if (bInterrupt) _XChk_StopAnim(*e, FALSE);
 	_XChk_RefreshVisual(*e, TRUE, bInterrupt);
@@ -658,10 +615,6 @@ BOOL CXCheckAnim::Detach(HELE hBtn)
 	auto& g = _XChk_G();
 	auto it = g.registry.find(hBtn);
 	if (it == g.registry.end()) return FALSE;
-	if (it->second.bCapture){
-		XEle_SetCapture(hBtn, FALSE);
-		it->second.bCapture = FALSE;
-	}
 	_XChk_StopAnim(it->second);
 	_XChk_UnhookEvents(hBtn, it->second);
 	if (!it->second.cachedTitle.empty())

@@ -2346,6 +2346,9 @@ private:
 	// XEle_ClearBkInfo + XEle_AddBkFill + XEle_AddBkBorder, 让 SetBkColor 等设置器和
 	// XEle_SetBkInfo / EnableDrawBorder / EnableDrawFocus 共用同一条 XCGUI 标准绘制流水线.
 	void RebuildBkInfo();
+	// 把 m_drawBorder 落到当前 HELE: 默认边框开关 + 内置焦点边框色 (关时透明).
+	// 同一对象再次 Create 后必须重放, 不能只靠 EnableDrawBorderEx 的状态相等短路.
+	void ApplyDrawBorderToEle();
 	float GetContentWidth();
 	float GetContentHeight();
 	// 文本对齐辅助. 仅单行模式有意义; 多行模式返回 0 / LEADING.
@@ -4873,8 +4876,10 @@ enum xcheckanim_text_align_
 
 //@分组{ 多选框动画
 //@备注  WinUI3 风格 Toggle 多选框动画工具类, 全静态方法. 将已有 HELE 按钮转为
-//       自绘开关: 背景透明 + XE_PAINT 强制覆盖 + 6 态着色 + 按下拉长前台圆点 +
-//       弹起区外取消. 每个按钮独立动画组, 互斥不叠加.
+//       自绘开关: 背景透明 + XE_PAINT 强制覆盖 + 6 态着色 + 按下拉长前台圆点.
+//       同一事件按注册顺序执行, 前面拦截则后面不再触发, XCGUI 内置行为优先级最低.
+//       因此仅 PAINT/PAINT_END 拦截以覆盖默认绘制; 鼠标/点击/选中不得拦截,
+//       切换交给内置 check 按钮, 业务 XML/CPP 回调按注册顺序照常到达.
 //       调用形如: CXCheckAnim::AttachBtn(hBtn);
 //@别名  炫彩多选框动画类
 class CXCheckAnim
@@ -4882,7 +4887,7 @@ class CXCheckAnim
 public:
 
 //@备注 附加到已有按钮. 非 XC_BUTTON 返回 FALSE; 非 check 类型自动设为 button_type_check.
-//      启用背景透明, 隐藏按钮标题 (缓存至内部), 注册绘制/鼠标/选中事件.
+//      启用背景透明, 隐藏按钮标题 (缓存至内部). 仅绘制拦截; 鼠标/选中只刷新外观, 不拦截.
 //      宽度: 标题为空 = 32px; 有标题 = 标题宽 + 6px 间距 + 32px 开关区.
 //      若传入 nWidth 小于上述最小宽则抬升至最小宽; 足够则保持 nWidth.
 //      高度固定 20px (nHeight 默认 20).
@@ -4960,7 +4965,6 @@ public:
 	static int CALLBACK OnMouseLeaveC(HELE hBtn, BOOL* pbHandled);
 	static int CALLBACK OnLButtonDownC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 	static int CALLBACK OnLButtonUpC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
-	static int CALLBACK OnBnClickC(HELE hBtn, BOOL* pbHandled);
 	static int CALLBACK OnButtonCheckC(HELE hBtn, BOOL bCheck, BOOL* pbHandled);
 	static int CALLBACK OnDestroyC(HELE hBtn, BOOL* pbHandled);
 	//@隐藏}
