@@ -538,7 +538,27 @@ static int CALLBACK _CXShadow_PaintCB(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled
     if (!p) return 0;
     return p->OnWndPaintImpl(hWnd, hDraw, pbHandled);
 }
+
+static bool _CXShadow_IsPopupMenuWindow(HWINDOW hWnd){
+    if (!hWnd || !::XC_IsHWINDOW((HXCGUI)hWnd)) return false;
+    const XC_OBJECT_TYPE t = ::XC_GetObjectType((HXCGUI)hWnd);
+    return t == XC_POPUPMENUWINDOW || t == XC_POPUPMENUCHILDWINDOW;
+}
+
+// 拦住 XMenu 默认白底+左侧槽, 内圈已由 DrawNormalPaint 画过.
+static int CALLBACK _CXShadow_MenuDrawBackgroundCB(HWINDOW hWnd, HDRAW hDraw,
+    menu_drawBackground_* pInfo, BOOL* pbHandled){
+    (void)hWnd;
+    (void)hDraw;
+    (void)pInfo;
+    if (pbHandled) *pbHandled = TRUE;
+    return 0;
+}
 }  // namespace
+
+int CXShadow::GetShadowMargin(){
+    return _XUITool::kShadowMargin;
+}
 
 void CXShadow::HookEvents(){
     if (m_eventsHooked || m_hAttachedWnd == NULL) return;
@@ -546,6 +566,11 @@ void CXShadow::HookEvents(){
     ::XWnd_RegEventC1(m_hAttachedWnd, XWM_WINDPROC, (void*)_CXShadow_WindProcCB);
     // 窗口绘制事件: WM_PAINT (0x000F) — XE_PAINT(=2) 是 *元素* 事件, 不会派给 window!
     ::XWnd_RegEventC1(m_hAttachedWnd, WM_PAINT,     (void*)_CXShadow_PaintCB);
+    if (_CXShadow_IsPopupMenuWindow(m_hAttachedWnd)){
+        ::XWnd_SetBkInfo(m_hAttachedWnd, L"");
+        ::XWnd_RegEventC1(m_hAttachedWnd, XWM_MENU_DRAW_BACKGROUND,
+                          (void*)_CXShadow_MenuDrawBackgroundCB);
+    }
 
     // Win32 子类化 — WM_NCHITTEST 走子类, 比 XCGUI wndproc 更靠前 (click-through 必备).
     //
@@ -758,6 +783,11 @@ void CXShadow::SetOuterPositionInternal(int x, int y){
 
 void CXShadow::ExpandOuterFromBody(){
     if (!m_hAttachedWnd || m_outerExpanded || m_isMaximized || m_isSnapped) return;
+    // 菜单窗已由 XMenu_SetBorderSize 预留四边, 再外扩会在右/下多出一截.
+    if (_CXShadow_IsPopupMenuWindow(m_hAttachedWnd)){
+        m_outerExpanded = true;
+        return;
+    }
     RECT outer = {};
     ::XWnd_GetRect(m_hAttachedWnd, &outer);
     int L, T, R, B;
@@ -771,6 +801,10 @@ void CXShadow::ExpandOuterFromBody(){
 
 void CXShadow::ContractOuterToBody(){
     if (!m_hAttachedWnd || !m_outerExpanded || m_isMaximized || m_isSnapped) return;
+    if (_CXShadow_IsPopupMenuWindow(m_hAttachedWnd)){
+        m_outerExpanded = false;
+        return;
+    }
     RECT body = {};
     ::XWnd_GetRect(m_hAttachedWnd, &body);
     int L, T, R, B;
@@ -1068,6 +1102,10 @@ void CXShadow::ApplyPadding(){
     int L, T, R, B;
     ComputeShadowMargin(&L, &T, &R, &B);
     m_marginL = L; m_marginT = T; m_marginR = R; m_marginB = B;
+    if (_CXShadow_IsPopupMenuWindow(m_hAttachedWnd)){
+        // XMenu 不走布局, 窗口 padding 不会移动项, 只干扰默认绘制原点.
+        return;
+    }
 
     // 2) 窗口实际 padding = Attach 前 BasePadding + margin. 描边属于 BodyRect
     //    边界内的视觉层, 不额外吃布局尺寸. 所有值均为 XCGUI 逻辑像素.
@@ -1203,7 +1241,7 @@ void CXShadow::SyncWindowState(){
 //   1. 取 client rect (XCGUI 在 transparent_shaped 模式下 client = window 全区).
 //   2. 最大化态: DrawMaximizedPaint (全矩 inner bg, 无阴影 / 无描边).
 //   3. 普通态:   DrawNormalPaint (shadow halo + inner bg + 1px 描边).
-//   4. 设 *pbHandled = TRUE → XCGUI 跳过默认背景填充, 但仍会递归画子元素.
+//   4. 普通窗口 *pbHandled = TRUE 跳过默认背景; 弹出菜单不拦截, 只拦默认菜单底.
 //============================================================================
 int CXShadow::OnWndPaintImpl(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled){
     if (!hDraw || !hWnd) return 0;
@@ -1262,9 +1300,11 @@ int CXShadow::OnWndPaintImpl(HWINDOW hWnd, HDRAW hDraw, BOOL* pbHandled){
             DrawNormalPaint(hDraw, cw, ch);
         }
     }
-    // pbHandled = TRUE: 告诉 XCGUI "背景我画了, 不要再默认填色".
-    // XCGUI 还会继续走后面的子元素递归绘制 (与 pbHandled 无关).
-    if (pbHandled) *pbHandled = TRUE;
+    // 普通窗口: 拦截默认背景填充, 子元素仍会画.
+    // 弹出菜单: 项背景/文本走窗口默认绘制, 拦截会连项一起跳过; 放行默认绘制,
+    // 默认菜单底由 XWM_MENU_DRAW_BACKGROUND 拦掉, 内圈沿用上面的阴影填充.
+    if (pbHandled && !_CXShadow_IsPopupMenuWindow(hWnd))
+        *pbHandled = TRUE;
     return 0;
 }
 

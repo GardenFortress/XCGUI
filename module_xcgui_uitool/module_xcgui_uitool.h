@@ -1176,6 +1176,11 @@ public:
 //@别名  取窗口主体客户区坐标()
     static BOOL GetBodyClientRect(HWINDOW hWnd, RECT* pRect);
 
+//@备注 阴影几何边距, 与 tooltip / calendar 相同的四边等宽逻辑像素.
+//      弹出菜单在附加后用 XMenu_SetBorderSize(边距+项内边距) 把项推进主体.
+//@别名  取阴影边距()
+    static int GetShadowMargin();
+
 //@备注 获取窗口视觉主体坐标, 单位及坐标系与 XWnd_GetRect / 窗口_取坐标()
 //      完全相同. 普通阴影态自动排除阴影; 最大化 / Snap / 未附加时等同
 //      XWnd_GetRect.
