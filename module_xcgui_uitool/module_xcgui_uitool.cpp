@@ -2,7 +2,7 @@
 #define _XCGUI_UITOOL_AGGREGATED_
 //
 // 顶层类 split:
-//   CXTooltip / CXLoading / CXCalendarCard / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim (+ dcomp)
+//   CXTooltip / CXLoading / CXCalendarCard / CXDate / CXShadow / CXEditDW / CXChatBubbleBox / CXBlur / CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim (+ dcomp)
 // 共有:
 //   module_xcgui_uitool_common.inc      — 系统环境 + _XUITool 主题层
 //   module_xcgui_uitool_steps_const.inc — CXSteps 布局/动画常量
@@ -32,6 +32,7 @@
 #include "module_xcgui_uitool_notify.cpp"
 #include "module_xcgui_uitool_loading.cpp"
 #include "module_xcgui_uitool_calendar.cpp"
+#include "module_xcgui_uitool_date.cpp"
 #include "module_xcgui_uitool_colorpicker.cpp"
 #include "module_xcgui_uitool_shadow.inc"
 #include "module_xcgui_uitool_editdw.cpp"

@@ -1,8 +1,8 @@
 ﻿#ifndef  XCGUI_UITOOL_H
 #define  XCGUI_UITOOL_H
 //@模块名称  炫彩界面库UI工具集
-//@版本  1.2.0
-//@日期  2026-07-27
+//@版本  1.3.0
+//@日期  2026-08-19
 //@作者  未闻花名
 //@QQ    936599025
 //@依赖  module_xcgui_class.h
@@ -11,7 +11,7 @@
 //          XCGUI 别名工具会逐个识别. 不再用嵌套 class 形式 (扫描器不识别).
 //
 //          已实现的顶层类:
-//          模块内主题: CXTooltip / CXNotify / CXLoading / CXCalendarCard / CXShadow / CXBlur /
+//          模块内主题: CXTooltip / CXNotify / CXLoading / CXCalendarCard / CXDate / CXShadow / CXBlur /
 //            CXAccordion / CXCardPanel / CXSteps / CXColorPicker / CXCheckAnim 共用
 //            xuitool_theme_ 与 _XUITool 主题层 (深/浅/自定义/跟随系统), 预设色与系统检测只维护一份.
 //          [1] CXTooltip — 鼠标悬停气泡提示
@@ -38,16 +38,21 @@
 //            - 默认限制最大可选日期为今天, 也可指定最大日期或关闭限制.
 //            - 双月范围支持今天 / 近7天 / 近15天 / 近30天快捷选择.
 //            - 弹窗使用 window_transparent_shaped, 自绘圆角背景与柔和阴影.
-//          [4] CXShadow — Win11 风格窗口外阴影 + 圆角描边 (原 shadow 模块)
-//          [5] CXEditDW — DirectWrite 彩色 emoji 编辑框 (原 editdw 模块)
-//          [6] CXBlur — DWM 亚克力 / 磨砂玻璃虚化 (原 blur 模块)
-//          [7] CXChatBubbleBox — IM 聊天气泡富文本对话框 (原 chat 模块)
-//          [8] CXAccordion — 折叠面板 (FAQ / 设置分组 / 引导清单)
-//          [9] CXCardPanel — 卡片面板 (组标题 + 圆角卡片, 设置页风格)
-//          [10] CXSteps — 步骤条 (水平/垂直向导进度, 深/浅主题)
-//          [11] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
-//          [12] CXCheckAnim — WinUI3 风格多选框 (Toggle) 动画附加
-//          [13] CXNotify — 系统托盘通知 + 老系统 XCGUI 非模态通知降级
+//          [4] CXDate — 日期时间选择卡片 (附加编辑框/组合框)
+//            - 附加到 XC_EDIT / XC_COMBOBOX: 单击弹出非模态选择器, 已显示则复用.
+//            - 弹窗不抢编辑框焦点, 可同时用键盘左右/点选切换字段, 并点月历或滚动时分秒.
+//            - 四种格式: YYYY-MM-DD HH:MM:SS / YYYY-MM-DD HH:MM / HH:MM:SS / HH:MM.
+//            - 底部 [此刻] 写入当前时间. 含日期时左月历+右时分秒; 仅时间时只显示滚动列.
+//          [5] CXShadow — Win11 风格窗口外阴影 + 圆角描边 (原 shadow 模块)
+//          [6] CXEditDW — DirectWrite 彩色 emoji 编辑框 (原 editdw 模块)
+//          [7] CXBlur — DWM 亚克力 / 磨砂玻璃虚化 (原 blur 模块)
+//          [8] CXChatBubbleBox — IM 聊天气泡富文本对话框 (原 chat 模块)
+//          [9] CXAccordion — 折叠面板 (FAQ / 设置分组 / 引导清单)
+//          [10] CXCardPanel — 卡片面板 (组标题 + 圆角卡片, 设置页风格)
+//          [11] CXSteps — 步骤条 (水平/垂直向导进度, 深/浅主题)
+//          [12] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
+//          [13] CXCheckAnim — WinUI3 风格多选框 (Toggle) 动画附加
+//          [14] CXNotify — 系统托盘通知 + 老系统 XCGUI 非模态通知降级
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -95,6 +100,7 @@ class CXTooltip;
 class CXNotify;
 class CXLoading;
 class CXCalendarCard;
+class CXDate;
 class CXShadow;
 class CXEditDW;
 class CXBlur;
@@ -139,7 +145,7 @@ HCURSOR XUITool_LoadSystemCursor(const wchar_t* cursorId);
 
 //@分组}
 
-///<UI 工具集颜色主题 (CXTooltip / CXLoading / CXCalendarCard 共用)
+///<UI 工具集颜色主题 (CXTooltip / CXLoading / CXCalendarCard / CXDate 共用)
 //@别名 UI工具主题
 enum xuitool_theme_
 {
@@ -880,6 +886,135 @@ public:
 //@别名  弹出双月历()
 	static BOOL PopupDouble(HWINDOW hParent, xcalendar_datetime_* pStart, xcalendar_datetime_* pEnd,
 		BOOL bLimitMaxDate = TRUE, xuitool_theme_ theme = xuitool_theme_auto,
+		const xcalendar_datetime_* pMaxDate = NULL, int nCornerRadius = 8);
+};
+//@分组}
+
+// =====================================================================
+// CXDate — 日期时间选择卡片 (左月历 + 右时分秒滚动)
+// =====================================================================
+
+///<日期时间文本格式
+//@别名 日期时间格式
+enum xdate_format_
+{
+	//@别名 日期时间格式_日期时间
+	xdate_format_datetime = 0,  ///<YYYY-MM-DD HH:MM:SS
+	//@别名 日期时间格式_日期时分
+	xdate_format_date_hm  = 1,  ///<YYYY-MM-DD HH:MM
+	//@别名 日期时间格式_时分秒
+	xdate_format_hms      = 2,  ///<HH:MM:SS
+	//@别名 日期时间格式_时分
+	xdate_format_hm       = 3,  ///<HH:MM
+};
+
+//@分组{ 日期时间
+//@备注  日期时间选择卡片, 全静态方法. 通过 附加编辑框 挂到已有 XC_EDIT 或 XC_COMBOBOX.
+//       格式四选一: YYYY-MM-DD HH:MM:SS / YYYY-MM-DD HH:MM / HH:MM:SS / HH:MM.
+//       附加后编辑框按字段编辑 (点击选段, 上下键/滚轮增减, 数字键改当前段).
+//       单击弹出非模态选择器且不抢焦点, 已显示则复用; 可同时改编辑框字段和弹窗.
+//       底部 [此刻] 写入当前时间. 主题、圆角、阴影与 CXCalendarCard 一致.
+//@别名  炫彩日期时间类
+class CXDate
+{
+public:
+
+	// ===== 日期工具 =====
+
+//@备注 获取本机当前日期时间.
+//@返回 当前日期时间
+//@别名  取今天()
+	static xcalendar_datetime_ GetToday();
+
+//@备注 按格式输出日期时间文本.
+//@参数 date 日期时间
+//@参数 format 文本格式
+//@返回 格式化文本
+//@别名  格式化日期时间()
+	static CXText FormatDateTime(xcalendar_datetime_ date,
+		xdate_format_ format = xdate_format_datetime);
+
+//@备注 按格式输出并返回临时 const wchar_t* 指针; 下次调用会覆盖.
+//@参数 date 日期时间
+//@参数 format 文本格式
+//@返回 临时文本指针
+//@别名  格式化日期时间指针()
+	static const wchar_t* FormatDateTimePtr(xcalendar_datetime_ date,
+		xdate_format_ format = xdate_format_datetime);
+
+	// ===== 附加编辑框 =====
+
+//@备注 附加到已有编辑框或组合框. 附加后文本按 format 分段编辑, 不能自由输入.
+//       点击选中字段并弹出非模态选择器 (不抢编辑框焦点); 已显示则复用, 不重复创建.
+//       上下键或滚轮增减当前段, 数字键覆盖当前段. 选择器与编辑框双向同步.
+//       组合框拦截下拉同样弹出. 附加成功后写入当前时间并重绘. 重复附加会更新配置.
+//@参数 hEdit 编辑框或组合框句柄
+//@参数 format 文本与选择器格式
+//@参数 bLimitMaxDate 含日期时是否启用最大日期限制
+//@参数 theme UI工具主题枚举 (推荐 dark / light / auto)
+//@参数 pMaxDate 最大可选日期, NULL 表示今天
+//@参数 nCornerRadius 弹窗圆角大小
+//@返回 成功 TRUE; 句柄无效或不是编辑框/组合框返回 FALSE
+//@别名  附加编辑框()
+	static BOOL AttachEdit(HELE hEdit, xdate_format_ format = xdate_format_datetime,
+		BOOL bLimitMaxDate = FALSE, xuitool_theme_ theme = xuitool_theme_auto,
+		const xcalendar_datetime_* pMaxDate = NULL, int nCornerRadius = 8);
+
+//@备注 解除附加, 反注册事件. 元素已销毁时也安全.
+//@参数 hEdit 编辑框或组合框句柄
+//@返回 原先已附加返回 TRUE
+//@别名  解除附加()
+	static BOOL DetachEdit(HELE hEdit);
+
+//@备注 是否已附加到该编辑框/组合框.
+//@参数 hEdit 编辑框或组合框句柄
+//@返回 已附加 TRUE
+//@别名  是否已附加()
+	static BOOL IsAttached(HELE hEdit);
+
+//@备注 从编辑框/组合框文本解析日期时间. 文本为空或无法解析返回 FALSE.
+//@参数 hEdit 编辑框或组合框句柄
+//@参数 pDate 接收解析结果
+//@返回 解析成功 TRUE
+//@别名  取日期时间()
+	static BOOL GetDateTime(HELE hEdit, xcalendar_datetime_* pDate);
+
+//@备注 按格式写到编辑框/组合框并重绘. 已附加时改用附加时的格式.
+//@参数 hEdit 编辑框或组合框句柄
+//@参数 date 日期时间
+//@参数 format 未附加时使用的格式
+//@返回 成功 TRUE
+//@别名  置日期时间()
+	static BOOL SetDateTime(HELE hEdit, xcalendar_datetime_ date,
+		xdate_format_ format = xdate_format_datetime);
+
+	// ===== 一次性弹出 =====
+
+//@备注 设置下一次 Popup 的定位元素 (元素左下角 + 偏移). 附加编辑框时会自动按该元素定位.
+//@参数 hEle 定位元素句柄
+//@参数 offsetX 横向偏移
+//@参数 offsetY 纵向偏移
+//@别名  置绑定元素()
+	static void SetBindEle(HELE hEle, int offsetX = 0, int offsetY = 4);
+
+//@备注 设置下一次 Popup 的屏幕坐标位置.
+//@参数 pt 屏幕坐标
+//@别名  置弹出位置()
+	static void SetPopupPosition(POINT pt);
+
+//@备注 弹出日期时间选择卡片 (不附加元素). 确认写回 pDate; 取消返回 FALSE.
+//@参数 hParent 父窗口句柄, 可为 NULL
+//@参数 pDate 输入初始日期时间并接收选择结果
+//@参数 format 文本与选择器格式
+//@参数 bLimitMaxDate 含日期时是否启用最大日期限制
+//@参数 theme UI工具主题枚举 (推荐 dark / light / auto)
+//@参数 pMaxDate 最大可选日期, NULL 表示今天
+//@参数 nCornerRadius 弹窗圆角大小
+//@返回 确认 TRUE, 取消 FALSE
+//@别名  弹出()
+	static BOOL Popup(HWINDOW hParent, xcalendar_datetime_* pDate,
+		xdate_format_ format = xdate_format_datetime,
+		BOOL bLimitMaxDate = FALSE, xuitool_theme_ theme = xuitool_theme_auto,
 		const xcalendar_datetime_* pMaxDate = NULL, int nCornerRadius = 8);
 };
 //@分组}
