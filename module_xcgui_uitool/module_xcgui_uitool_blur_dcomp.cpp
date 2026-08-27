@@ -80,33 +80,12 @@ BOOL  WINAPI XC_IsHWINDOW(HXCGUI hWindow);
 #pragma comment(lib, "delayimp.lib")
 
 // ============================================================================
-// Windows 7 兼容性火墙：延迟加载 Win8/Win10 特专属 DLL 与 API 接口集
+// Windows 7 兼容性火墙
 // ============================================================================
-
-// 1. WinRT 核心基础服务 (激活、类工厂等，Win8+)
-#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll")
-
-// 2. HSTRING 字符串处理 (C++/WinRT 传递参数必用，Win8+)
-#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-string-l1-1-0.dll")
-
-// 3. WinRT 错误处理与报告 (Win8+/Win10)
-#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-error-l1-1-0.dll")
-#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-error-l1-1-1.dll")
-
-// 4. 参数化接口 IID 生成器 (C++/WinRT 模板/泛型实例化时依赖，Win10)
-#pragma comment(linker, "/DELAYLOAD:api-ms-win-core-winrt-roparameterizediid-l1-1-0.dll")
-
-// 5. COM 核心基础 (WinRT 底层映射的核心库，Win8+)
-#pragma comment(linker, "/DELAYLOAD:combase.dll")
-
-// 6. 现代 DPI 与缩放管理 (Win8.1+)
-#pragma comment(linker, "/DELAYLOAD:shcore.dll")
-
-// 7. 直接合成核心库 (DirectComposition 运行时，Win8+)
-#pragma comment(linker, "/DELAYLOAD:dcomp.dll")
-
-// 8. 现代消息调度通道 (DispatcherQueue 运行依赖，Win10)
-#pragma comment(linker, "/DELAYLOAD:CoreMessaging.dll")
+// 炫彩 IDE 会把本文件合并为 module_xcgui_uitool.obj。MSVC 不接受从对象
+// .drectve 传入 /DELAYLOAD，使用 pragma 会产生 LNK4229 并被忽略。本模块不
+// 静态链接 DComp/WindowsApp/CoreMessaging；代码侧在进入 DComp 路径前通过
+// LoadLibraryW/GetProcAddress 和 C++/WinRT 自身的运行时解析完成能力探测。
 
 namespace ABI_GE = ABI::Windows::Graphics::Effects;
 namespace WGE    = winrt::Windows::Graphics::Effects;

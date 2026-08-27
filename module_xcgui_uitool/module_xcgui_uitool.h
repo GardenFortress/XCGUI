@@ -91,9 +91,6 @@
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "D3d11.lib")
 #pragma comment(lib, "Dxgi.lib")
-#pragma comment(lib, "DComp.lib")
-#pragma comment(lib, "WindowsApp.lib")
-#pragma comment(lib, "CoreMessaging.lib")
 
 //@隐藏{
 class CXTooltip;
