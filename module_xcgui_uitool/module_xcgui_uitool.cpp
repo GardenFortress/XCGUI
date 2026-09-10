@@ -10,7 +10,7 @@
 //   module_xcgui_uitool_svgs.inc        — 月历导航 + tooltip 图标 SVG
 
 #include "module_xcgui_uitool.h"
-
+#pragma comment(lib, "runtimeobject.lib")
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -107,4 +107,3 @@ InstancesLock::InstancesLock()  { ::AcquireSRWLockExclusive(&S().instLock); }
 InstancesLock::~InstancesLock() { ::ReleaseSRWLockExclusive(&S().instLock); }
 
 } // namespace CXShadowModule
-`n#pragma comment(lib, "runtimeobject.lib")
