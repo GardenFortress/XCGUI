@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--炫彩界面库-窗口布局文件-->
+<head />
+<windowUI bkInfoM_nameT="0(矩形)" center="true" content="炫彩界面库 - 我的窗口名" rect="0,0,1000,820" windowStyle="239" dragWindow="true" dragBorder="true">
+	<buttonUI rect="82,152,60,25" content="按钮5" name="按钮5" layoutControl="false" topmost="true" />
+	<layoutEleUI rect="140,280,100,100" layout.wrap="true" layout.width="500" layout.height="500" show="false" showT="false" expandT="false">
+		<layoutEleUI rect="219,112,100,100" layout.width="fill" layout.height="fill" show="false">
+			<shapeText layout.width="fill" rect="236,83,100,20" content="系统设置" layout.height="24" layout.margin="16,0,16,0" />
+			<layoutEleUI rect="218,12,100,100" layout.width="fill" layout.height="auto" layout.minSize="0,46" padding="16,0,16,0">
+				<buttonUI rect="153,27,60,25" content="按钮3" layout.width="fill" layout.height="40" />
+				<buttonUI rect="250,23,60,25" content="按钮4" layout.width="fill" layout.height="40" />
+			</layoutEleUI>
+		</layoutEleUI>
+	</layoutEleUI>
+	<layoutEleUI rect="444,275,100,100" layout.width="fill" layout.height="fill" name="布局元素1" show="false">
+		<layoutEleUI rect="350,191,100,100" layout.wrap="true" layout.width="fill" layout.height=":1" name="布局元素2" />
+		<layoutEleUI rect="791,-9,100,100" layout.wrap="true" layout.width="fill" layout.height=":1" name="布局元素3" />
+		<layoutEleUI rect="813,99,100,100" layout.wrap="true" layout.width="fill" layout.height=":1">
+			<buttonUI rect="76,179,60,25" bkInfoM="{sizeT:100,16;99:1.9.9;98:272(0,1)288(2,1)320(2,1)144(5,6)160(7,6)192(7,6)258(3,4)130(8,9);5:2(33)3(0,16,32,0)20(1)21(3)26(1)22(-3027509)23(255)9(8,8,8,8);6:2(33)3(2,12,12,100)20(1)21(3)26(1)22(-1)23(255);5:2(33)3(0,16,32,0)20(1)21(3)26(1)22(-3422783)23(255)9(8,8,8,8);5:2(33)3(0,16,32,0)20(1)21(3)26(1)22(-2133733941)23(128)9(8,8,8,8);6:2(33)3(2,12,12,12)20(1)21(3)26(1)22(-2130706433)23(128);5:2(33)3(0,16,32,16)20(1)21(3)26(1)22(-233178)23(255)9(8,8,8,8);6:2(33)3(18,12,12,12)20(1)21(3)26(1)22(-1)23(255);5:2(33)3(0,16,32,16)20(1)21(3)26(1)22(-1548769)23(255)9(8,8,8,8);5:2(33)3(0,16,32,16)20(1)21(3)26(1)22(-2130939610)23(128)9(8,8,8,8);6:2(33)3(18,12,12,12)20(1)21(3)26(1)22(-1)23(255);}" buttonType="check" name="按钮1" transparent="true" layout.margin="100" />
+			<buttonUI rect="256,143,80,25" content="显示日期" name="按钮2" />
+			<buttonUI rect="312,26,87,25" content="显示双日期" name="显示双日期" />
+		</layoutEleUI>
+	</layoutEleUI>
+</windowUI>

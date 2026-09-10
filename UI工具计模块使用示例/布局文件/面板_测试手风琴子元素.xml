@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--炫彩界面库-布局面板文件-->
+<head />
+<layoutPanel widthT="500" heightT="400">
+	<buttonUI rect="270,213,60,25" content="按钮1" layout.width="fill" layout.height="200" />
+</layoutPanel>

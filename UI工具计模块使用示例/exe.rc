@@ -1,0 +1,66 @@
+// Microsoft Visual C++ generated resource script.
+//
+//#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#define APSTUDIO_HIDDEN_SYMBOLS
+#include "windows.h"
+#undef APSTUDIO_HIDDEN_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// 中文(简体，中国) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#pragma code_page(936)
+
+
+IDI_ICON  ICON  "exe.ico"
+
+#define         IDR_UI_ZIP    100
+#if defined(_XC_UI_ZIP)
+IDR_UI_ZIP      RT_RCDATA    "UI_ZIP.zip"
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 2019,10,1,0
+ PRODUCTVERSION 1,0,0,1
+ FILEFLAGSMASK 0x17L
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x2L
+ FILESUBTYPE 0x0L
+ BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "炫语言程序"
+            VALUE "FileDescription", "炫语言-中文编程IDE"
+            VALUE "FileVersion", "2019.10.1.0"
+            VALUE "InternalName", "炫语言-中文编程IDE"
+            VALUE "LegalCopyright", "Copyright (C) 2010-2019 炫语言"
+            VALUE "LegalTrademarks", "炫语言-中文编程IDE"
+            VALUE "OriginalFilename", "XCGUI.exe"
+            VALUE "ProductName", "xc.exe"
+            VALUE "ProductVersion", "1.0.0.1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+#endif
+
