@@ -107,3 +107,4 @@ InstancesLock::InstancesLock()  { ::AcquireSRWLockExclusive(&S().instLock); }
 InstancesLock::~InstancesLock() { ::ReleaseSRWLockExclusive(&S().instLock); }
 
 } // namespace CXShadowModule
+`n#pragma comment(lib, "runtimeobject.lib")
