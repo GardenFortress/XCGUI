@@ -1063,9 +1063,42 @@ static void XBlurDComp_SyncZOrder(HWND hwnd, HWND acrylic){
 	}
 }
 
-// Acrylic 外扩 device pixels — acrylic HWND 比 XCGUI HWND 4 边各大 N 像素, 让 acrylic
-// 系统描边 (DWM 1px BORDER) 露在 XCGUI 边外, 不被 XCGUI alpha 客户区覆盖.
-static constexpr int kAcrylicOuterPx = 1;
+// DWM 返回物理像素厚度，不能固定为 1，也不能再乘 XCGUI 的逻辑 DPI。
+// 例如系统 150% 时描边为 2px，固定外扩 1px 会让贴边内容盖住内侧一行。
+static int XBlurDComp_AcrylicBorderPx(HWND acrylic){
+	UINT pixels = 0;
+	if (SUCCEEDED(::DwmGetWindowAttribute(acrylic,
+		37 /* DWMWA_VISIBLE_FRAME_BORDER_THICKNESS (Win11) */, &pixels, sizeof(pixels))))
+		return (int)pixels;
+	// 旧系统没有该属性，按背板 HWND 的 DPI 向上取整，保留至少一像素。
+	using GetDpiForWindowFn = UINT (WINAPI*)(HWND);
+	static auto getDpi = (GetDpiForWindowFn)::GetProcAddress(
+		::GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+	UINT dpi = getDpi ? getDpi(acrylic) : 96;
+	return (int)(((dpi ? dpi : 96) + 95) / 96);
+}
+
+// 只改变背板，不改变业务布局/padding。移动和尺寸都从完整矩形计算：
+// 跨 DPI 时即便原消息带 NOSIZE/NOMOVE，描边厚度变化也可能同时改变二者。
+static void XBlurDComp_SyncAcrylicRect(HWND content, HWND acrylic, const RECT* pending = nullptr){
+	if (!::IsWindow(acrylic) || ::IsIconic(content) || ::IsIconic(acrylic)) return;
+	RECT contentRect{}, oldRect{};
+	if (pending) contentRect = *pending;
+	else if (!::GetWindowRect(content, &contentRect)) return;
+	const int border = XBlurDComp_AcrylicBorderPx(acrylic);
+	RECT target = contentRect;
+	::InflateRect(&target, border, border);
+	if (::GetWindowRect(acrylic, &oldRect) && ::EqualRect(&oldRect, &target)) return;
+	::SetWindowPos(acrylic, NULL, target.left, target.top,
+		(std::max)(1L, target.right - target.left), (std::max)(1L, target.bottom - target.top),
+		SWP_NOACTIVATE | SWP_NOZORDER);
+	XBlurDComp::Resize(acrylic, 0);
+}
+
+static UINT XBlurDComp_GeometrySyncMessage(){
+	static const UINT msg = ::RegisterWindowMessageW(L"XCGUI.CXBlur.SyncAcrylicRect");
+	return msg;
+}
 
 // 读布尔型实验开关 (值为 "1" 视为开).
 static bool XBlurDComp_ReadEnvFlag(const wchar_t* name){
@@ -1858,12 +1891,13 @@ static LRESULT CALLBACK AcrylicWndSubclassProc(
 		break;
 	case WM_DPICHANGED:
 		{
-			HWND ownedTop = ::GetWindow(hwnd, GW_HWNDPREV); // owned 在 owner 之上
-			bool maxd = false;
-			if (ownedTop) maxd = (::GetWindowLongPtrW(ownedTop, GWL_STYLE) & WS_MAXIMIZE) != 0;
+			bool maxd = owned && ::IsZoomed(owned);
 			XBlurDComp_SetAcrylicCornerPref(hwnd, maxd);
 			::SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
 				SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+			// 背板也会独立收到 DPI 消息。等主窗本轮定位完成后再取最终矩形，
+			// 避免跨屏移动途中用旧主窗坐标把背板拉回原屏幕。
+			if (owned) ::PostMessageW(owned, XBlurDComp_GeometrySyncMessage(), (WPARAM)hwnd, 0);
 		}
 		break;
 	case WM_NCDESTROY:
@@ -1880,6 +1914,10 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 	UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
 	HWND acrylicBackdrop = (HWND)dwRefData;
+	if (msg == XBlurDComp_GeometrySyncMessage()){
+		if ((HWND)wParam == acrylicBackdrop) XBlurDComp_SyncAcrylicRect(hwnd, acrylicBackdrop);
+		return 0;
+	}
 	if (msg == XBlurDComp_ZOrderSyncMessage()){
 		if ((HWND)wParam == acrylicBackdrop) XBlurDComp_SyncZOrder(hwnd, acrylicBackdrop);
 		return 0;
@@ -2023,16 +2061,14 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 			    wp && (::IsZoomed(hwnd) || (wp->flags & SWP_SHOWWINDOW)))
 				::ShowWindow(acrylicBackdrop, SW_RESTORE);
 			if (wp && !((wp->flags & SWP_NOSIZE) && (wp->flags & SWP_NOMOVE))){
-				UINT flags = SWP_NOACTIVATE | SWP_NOZORDER;
-				if (wp->flags & SWP_NOMOVE) flags |= SWP_NOMOVE;
-				if (wp->flags & SWP_NOSIZE) flags |= SWP_NOSIZE;
-				int aw = wp->cx + 2 * kAcrylicOuterPx; if (aw < 1) aw = 1;
-				int ah = wp->cy + 2 * kAcrylicOuterPx; if (ah < 1) ah = 1;
-				::SetWindowPos(acrylicBackdrop, NULL,
-					wp->x - kAcrylicOuterPx, wp->y - kAcrylicOuterPx,
-					aw, ah, flags);
-				if (!(wp->flags & SWP_NOSIZE)){
-					XBlurDComp::Resize(acrylicBackdrop, 0);
+				RECT pending{};
+				if (::GetWindowRect(hwnd, &pending)){
+					int width = (wp->flags & SWP_NOSIZE) ? pending.right - pending.left : wp->cx;
+					int height = (wp->flags & SWP_NOSIZE) ? pending.bottom - pending.top : wp->cy;
+					if (!(wp->flags & SWP_NOMOVE)) { pending.left = wp->x; pending.top = wp->y; }
+					pending.right = pending.left + width;
+					pending.bottom = pending.top + height;
+					XBlurDComp_SyncAcrylicRect(hwnd, acrylicBackdrop, &pending);
 				}
 			}
 		}
@@ -2067,18 +2103,24 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 			}
 		}
 		break;
-	case WM_DPICHANGED:
+	case WM_DPICHANGED: {
+		LRESULT result = ::DefSubclassProc(hwnd, msg, wParam, lParam);
 		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
 			bool maxd = (::GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_MAXIMIZE) != 0;
 			XBlurDComp_SetAcrylicCornerPref(acrylicBackdrop, maxd);
 			::SetWindowPos(acrylicBackdrop, NULL, 0, 0, 0, 0,
 				SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+			XBlurDComp_SyncAcrylicRect(hwnd, acrylicBackdrop);
 		}
 		XBlurDComp_ScheduleAcrylicSnapshot(hwnd);
-		break;
-	case WM_WINDOWPOSCHANGED:
+		return result;
+	}
+	case WM_WINDOWPOSCHANGED: {
+		LRESULT result = ::DefSubclassProc(hwnd, msg, wParam, lParam);
 		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
 			WINDOWPOS* wp = (WINDOWPOS*)lParam;
+			if (wp && (!(wp->flags & SWP_NOSIZE) || !(wp->flags & SWP_NOMOVE)))
+				XBlurDComp_SyncAcrylicRect(hwnd, acrylicBackdrop);
 			if (wp && (!(wp->flags & SWP_NOSIZE) || !(wp->flags & SWP_NOMOVE)) &&
 			    !contentMinimized()) XBlurDComp_ScheduleAcrylicSnapshot(hwnd);
 			// 部分框架路径只通过 WINDOWPOS 标志改变可见性，未必单独发送 WM_SHOWWINDOW。
@@ -2104,7 +2146,8 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 
 			if (wp && !(wp->flags & SWP_NOZORDER)) XBlurDComp_ScheduleZOrderSync(hwnd);
 		}
-		break;
+		return result;
+	}
 	case WM_NCDESTROY:
 		if (acrylicBackdrop && ::IsWindow(acrylicBackdrop)){
 			::RemoveWindowSubclass(acrylicBackdrop, AcrylicWndSubclassProc, 0xACDC);
@@ -2209,15 +2252,16 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		(DWORD)acrylicExStyle,
 		kAcCls, L"",
 		acrylicStyle,
-		xcRect.left - kAcrylicOuterPx, xcRect.top - kAcrylicOuterPx,
-		(xcRect.right - xcRect.left) + 2 * kAcrylicOuterPx,
-		(xcRect.bottom - xcRect.top) + 2 * kAcrylicOuterPx,
+		xcRect.left, xcRect.top,
+		xcRect.right - xcRect.left, xcRect.bottom - xcRect.top,
 		originalOwner, NULL, GetModuleHandleW(NULL), NULL);
 
 	if (pfnSetThreadDpiAwarenessContext && prevDpiCtx) {
 		pfnSetThreadDpiAwarenessContext(prevDpiCtx);
 	}
 	if (!acrylicBackdrop) return NULL;
+	XBlurDComp_SetAcrylicCornerPref(acrylicBackdrop, ::IsZoomed(xcguiHwnd) != FALSE);
+	XBlurDComp_SyncAcrylicRect(xcguiHwnd, acrylicBackdrop);
 
 	// 2b. taskbarOnAcrylic 时 acrylic 是"应用主窗", Alt+Tab / 任务栏 tooltip 会读它的
 	//     标题与图标。抄过去, 否则这些地方显示空标题 + 默认图标。
@@ -2305,6 +2349,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 
 	// 9. 显示 acrylic backdrop (SW_SHOWNA 不抢焦点).
 	::ShowWindow(acrylicBackdrop, SW_SHOWNA);
+	XBlurDComp_SyncAcrylicRect(xcguiHwnd, acrylicBackdrop);
 	XBlurDComp_ScheduleZOrderSync(xcguiHwnd);
 	XBlurDComp_ScheduleAcrylicSnapshot(xcguiHwnd);
 

@@ -34,6 +34,8 @@ void Disable(HWND host);
 // 调用前设 window_transparent_shaped 并关闭背景绘制；调用后设透明度 255、
 // 含非零 alpha 的背景信息及拖动行为。相关 XCGUI API 在调用方编译单元执行。
 // 原有 owner 保留在窗口链中；主窗销毁时自动解绑；创建失败返回 NULL。
+// 背板按 DWM 实际描边厚度向四边外扩物理像素，并随 DPI/尺寸同步；
+// 调用方无需为系统描边设置 XCGUI padding（已有业务 padding 保持不变）。
 HWND AttachAcrylicHost(void* hxw,
                        int tintR, int tintG, int tintB, int tintA,
                        float blurOpacity,
