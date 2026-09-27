@@ -927,6 +927,7 @@ struct AcrylicHostEntry {
 	// 任务栏 / peek 身份是否挂在 acrylic 窗上 (默认 true, 见下面对 peek 的说明).
 	// 为 false 时是旧行为: WS_EX_APPWINDOW 在 XCGUI 主窗上, acrylic 是 TOOLWINDOW.
 	bool taskbarOnAcrylic = false;
+	bool zOrderSyncPending = false;
 	// 效果链参数 —— 最小化后 DWM 会丢掉 WS_EX_NOREDIRECTIONBITMAP 窗的
 	// DesktopWindowTarget 合成 (实测还原后缩略图整片透明), 还原时必须用同一组
 	// 参数把合成重建出来, 所以这里存一份。
@@ -965,6 +966,82 @@ struct AcrylicHostEntry {
 };
 static std::map<HWND, AcrylicHostEntry> s_acrylicByXcgui; // key = xcgui HWND
 static std::mutex                       s_acrylicMutex;
+
+// WINDOWPOSCHANGED 仍可能处于 USER32 的 owner/owned 批量重排中。在其中
+// 再次 SetWindowPos 背板，结果会被外层重排覆盖；应在这轮消息处理完后同步。
+static UINT XBlurDComp_ZOrderSyncMessage(){
+	static const UINT msg = ::RegisterWindowMessageW(L"XCGUI.CXBlur.SyncAcrylicZOrder");
+	return msg;
+}
+
+static void XBlurDComp_ScheduleZOrderSync(HWND hwnd){
+	const UINT msg = XBlurDComp_ZOrderSyncMessage();
+	if (!msg) return;
+	std::lock_guard<std::mutex> lk(s_acrylicMutex);
+	auto it = s_acrylicByXcgui.find(hwnd);
+	if (it == s_acrylicByXcgui.end() || it->second.zOrderSyncPending) return;
+	if (::PostMessageW(hwnd, msg, (WPARAM)it->second.acrylicHwnd, 0))
+		it->second.zOrderSyncPending = true;
+}
+
+static bool XBlurDComp_IsAbove(HWND content, HWND owner){
+	for (HWND next = ::GetWindow(content, GW_HWNDNEXT); next; next = ::GetWindow(next, GW_HWNDNEXT)){
+		if (next == owner) return true;
+	}
+	return false;
+}
+
+static void XBlurDComp_RestoreOwnedOrder(HWND owner, unsigned depth = 0){
+	if (depth >= 64) return;
+	// 保存当前兄弟窗口顺序，再只修复位于 owner 下方的窗口。包括没有附加
+	// 模糊的炫彩弹窗；不改 owner、不抢焦点，也不把整组窗口抬到屏幕最前。
+	std::vector<HWND> owned;
+	for (HWND w = ::GetTopWindow(NULL); w; w = ::GetWindow(w, GW_HWNDNEXT)){
+		if (::GetWindow(w, GW_OWNER) == owner && ::IsWindowVisible(w) &&
+		    !::IsIconic(w) && ::GetWindowThreadProcessId(w, NULL) == ::GetCurrentThreadId())
+			owned.push_back(w);
+	}
+	for (HWND w : owned){
+		if (!::IsWindow(w) || ::GetWindow(w, GW_OWNER) != owner) continue;
+		if (!XBlurDComp_IsAbove(w, owner)){
+			HWND after = ::GetWindow(owner, GW_HWNDPREV);
+			// 非置顶组紧邻置顶区间时，用 HWND_TOP 保持其非置顶属性。
+			if (!after || (!(::GetWindowLongPtrW(w, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+			    (::GetWindowLongPtrW(after, GWL_EXSTYLE) & WS_EX_TOPMOST))) after = HWND_TOP;
+			::SetWindowPos(w, after, 0, 0, 0, 0,
+				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+		}
+		XBlurDComp_RestoreOwnedOrder(w, depth + 1);
+	}
+}
+
+static void XBlurDComp_SyncZOrder(HWND hwnd, HWND acrylic){
+	{
+		std::lock_guard<std::mutex> lk(s_acrylicMutex);
+		auto it = s_acrylicByXcgui.find(hwnd);
+		if (it == s_acrylicByXcgui.end() || it->second.acrylicHwnd != acrylic) return;
+		// 同步引起的嵌套 WINDOWPOS 通知不再重复投递。
+		it->second.zOrderSyncPending = true;
+	}
+	if (::IsWindow(hwnd) && ::IsWindow(acrylic)){
+		const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+		const bool mainTop = (::GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+		const bool acrylicTop = (::GetWindowLongPtrW(acrylic, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+		if (mainTop != acrylicTop)
+			::SetWindowPos(acrylic, mainTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+		// 同一置顶区间也可能发生 owner 在 owned 之上的反转。只修复反转，
+		// 不把窗口无条件抬到最前，保留其他应用和业务弹窗的相对顺序。
+		if (!XBlurDComp_IsAbove(hwnd, acrylic))
+			::SetWindowPos(acrylic, hwnd, 0, 0, 0, 0, flags);
+		XBlurDComp_RestoreOwnedOrder(acrylic);
+	}
+	{
+		std::lock_guard<std::mutex> lk(s_acrylicMutex);
+		auto it = s_acrylicByXcgui.find(hwnd);
+		if (it != s_acrylicByXcgui.end() && it->second.acrylicHwnd == acrylic)
+			it->second.zOrderSyncPending = false;
+	}
+}
 
 // Acrylic 外扩 device pixels — acrylic HWND 比 XCGUI HWND 4 边各大 N 像素, 让 acrylic
 // 系统描边 (DWM 1px BORDER) 露在 XCGUI 边外, 不被 XCGUI alpha 客户区覆盖.
@@ -1783,6 +1860,10 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 	UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
 	HWND acrylicBackdrop = (HWND)dwRefData;
+	if (msg == XBlurDComp_ZOrderSyncMessage()){
+		if ((HWND)wParam == acrylicBackdrop) XBlurDComp_SyncZOrder(hwnd, acrylicBackdrop);
+		return 0;
+	}
 
 	// 仅在需要任务栏身份的消息分支查表，避免给每条窗口消息加锁。
 
@@ -2001,16 +2082,7 @@ static LRESULT CALLBACK XcguiToAcrylicSyncProc(
 					::ShowWindow(acrylicBackdrop, SW_SHOWNA);
 			}
 
-			LONG_PTR exXcgui   = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-			LONG_PTR exAcrylic = ::GetWindowLongPtrW(acrylicBackdrop, GWL_EXSTYLE);
-			bool xcguiTop   = (exXcgui   & WS_EX_TOPMOST) != 0;
-			bool acrylicTop = (exAcrylic & WS_EX_TOPMOST) != 0;
-			if (xcguiTop != acrylicTop){
-				::SetWindowPos(acrylicBackdrop,
-					xcguiTop ? HWND_TOPMOST : HWND_NOTOPMOST,
-					0, 0, 0, 0,
-					SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-			}
+			if (wp && !(wp->flags & SWP_NOZORDER)) XBlurDComp_ScheduleZOrderSync(hwnd);
 		}
 		break;
 	case WM_NCDESTROY:
@@ -2213,6 +2285,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 
 	// 9. 显示 acrylic backdrop (SW_SHOWNA 不抢焦点).
 	::ShowWindow(acrylicBackdrop, SW_SHOWNA);
+	XBlurDComp_ScheduleZOrderSync(xcguiHwnd);
 	XBlurDComp_ScheduleAcrylicSnapshot(xcguiHwnd);
 
 	// 先激活身份窗，让首次任务栏点击触发最小化。
