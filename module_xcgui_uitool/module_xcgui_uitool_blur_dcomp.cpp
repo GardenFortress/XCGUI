@@ -611,9 +611,29 @@ static WGE::IGraphicsEffect BuildEffectChain(
     auto backdropParam = WUC::CompositionEffectSourceParameter(L"backdrop");
     auto tintParam     = WUC::CompositionEffectSourceParameter(L"tint");
 
+    // 保留局部色块，再用少量宽核把颜色带入相邻区域。不做整窗取色或壁纸平均。
+    // Composition 要求树形效果图；两个分支使用独立节点，绑定同一 backdrop。
+    constexpr float localSigma = 36.0f;
+    constexpr float diffusionSigma = 88.0f;
+    constexpr float diffusionWeight = 0.28f;
     auto blurFx = winrt::make_self<GaussianBlurEffectImpl>();
-    blurFx->StandardDeviation(30.0f);
+    blurFx->Name(L"LocalBlur");
+    blurFx->StandardDeviation(localSigma);
     blurFx->Source(backdropParam);
+
+    auto diffusionFx = winrt::make_self<GaussianBlurEffectImpl>();
+    diffusionFx->Name(L"ColorDiffusion");
+    diffusionFx->StandardDeviation(diffusionSigma);
+    diffusionFx->Source(WUC::CompositionEffectSourceParameter(L"backdrop"));
+
+    auto diffusionOpacity = winrt::make_self<OpacityEffectImpl>();
+    diffusionOpacity->Opacity(diffusionWeight);
+    diffusionOpacity->Source(diffusionFx.as<WGE::IGraphicsEffectSource>());
+
+    auto diffusionComposite = winrt::make_self<CompositeEffectImpl>();
+    diffusionComposite->Name(L"DiffusedBackdrop");
+    diffusionComposite->Destination(blurFx.as<WGE::IGraphicsEffectSource>());
+    diffusionComposite->Source(diffusionOpacity.as<WGE::IGraphicsEffectSource>());
 
     // Saturation: ColorMatrix v*M, Rec.709 luma.
     constexpr float Lr = 0.2126f, Lg = 0.7152f, Lb = 0.0722f;
@@ -628,7 +648,7 @@ static WGE::IGraphicsEffect BuildEffectChain(
     outSat = winrt::make_self<ColorMatrixEffectImpl>();
     outSat->Name(L"SaturationMatrix");
     outSat->SetMatrix(satMat);
-    outSat->Source(blurFx.as<WGE::IGraphicsEffectSource>());
+    outSat->Source(diffusionComposite.as<WGE::IGraphicsEffectSource>());
 
     WGE::IGraphicsEffectSource lumiSrc = outSat.as<WGE::IGraphicsEffectSource>();
     if (useLuminosity) {

@@ -307,25 +307,13 @@ static void XBlur_ResolveDcompEffectArgs(xuitool_theme_ themeIn, COLORREF userTi
 	blurOpacity = (userBlurOpacity >= 0.0f) ? userBlurOpacity
 	                                        : (dark ? 0.22f : 0.35f);
 
-	// 亮度锁定开启时 (默认), dcomp 链路 Saturation → LuminosityReplace → Opacity
-	// 的合成结果精确等于:
-	//     结果 = tint + blurOpacity × saturation × (桌面色 − 桌面亮度)
-	// 亮度恒等于 tint 亮度 (所以不会被桌面明暗拖出割裂), saturation 在这里的实际
-	// 作用是"桌面色度搬过来的倍率", 不是通常意义的提饱和.
-	//
-	// 原来的 1.2 / 1.3 (>1) 有两个副作用, 就是"提取黑白灰以外的颜色"发色偏色的
-	// 来源:
-	//   1. 桌面的 *绝对* 色度被放大后贴到一块近黑 (32) 或近白 (243) 的表面上,
-	//      相对饱和度远高于桌面本身 —— 中性面板会读成偏红 / 偏青的色块.
-	//   2. 8bpc 中间缓冲逐通道 clamp: 通道一旦出界就被单独截断, 色相被拽偏
-	//      (亮而饱和的壁纸最明显).
-	// 取 <1 的倍率同时消掉这两项: 色相原样等比搬运, 只保留一层淡色, 观感是
-	// "窗口沾了点桌面颜色"而不是"窗口被染色".
-	//
-	// 两个主题分别定值而不共用一个数, 是因为色度余量差得远: 浅色 tint 243 只剩
-	// 12/255 的正向余量, 主通道很快顶到 255 被截住, 倍率得给足才透得出颜色; 深色
-	// tint 32 正向余量几乎满格, 同样倍率下颜色会浓得多. 现值经实机比对校准.
-	saturation = dark ? 0.58f : 0.80f;
+	// 双尺度模糊先混合，再做 Saturation → LuminosityReplace → Opacity。
+	// 在通道未出界、tint 为中性色时：
+	//     结果 = tint + blurOpacity × saturation × (模糊色 − 模糊色亮度)
+	// 黑白灰的色度为零，因此仍不引入桌面的明暗轮廓。浅色/深色的色度余量
+	// 不同，分别降低搬运倍率，缓和强通透下的荧光感及逐通道截断造成的偏色。
+	// 这不是色域映射，极端饱和色仍可能在最终输出时截断。
+	saturation = dark ? 0.46f : 0.64f;
 
 	if (userNoise > 0.0f && userNoise <= 1.0f && userNoise != 0.06f){
 		noiseAlphaPct = userNoise * 100.0f;
