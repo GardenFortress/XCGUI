@@ -613,9 +613,9 @@ static WGE::IGraphicsEffect BuildEffectChain(
 
     // 保留局部色块，再用少量宽核把颜色带入相邻区域。不做整窗取色或壁纸平均。
     // Composition 要求树形效果图；两个分支使用独立节点，绑定同一 backdrop。
-    constexpr float localSigma = 36.0f;
-    constexpr float diffusionSigma = 88.0f;
-    constexpr float diffusionWeight = 0.28f;
+    constexpr float localSigma = 45.0f;
+    constexpr float diffusionSigma = 120.0f;
+    constexpr float diffusionWeight = 0.36f;
     auto blurFx = winrt::make_self<GaussianBlurEffectImpl>();
     blurFx->Name(L"LocalBlur");
     blurFx->StandardDeviation(localSigma);
