@@ -10,6 +10,9 @@
 #include <mutex>
 #include <vector>
 #include <atomic>
+#include <cmath>
+#include <new>
+
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -31,6 +34,8 @@ static void XBlur_EnsureGrayscaleTextAA(){
 #ifndef SafeRelease
 #define SafeRelease(p) do { if (p) { (p)->Release(); (p) = NULL; } } while (0)
 #endif
+
+#include "module_xcgui_uitool_blur_clip.inc"
 
 // 圆角路径构造 (per-corner): 四角不同时走 PathGeometry, 全相等走快路径.
 // 调用方拿走 ID2D1Geometry* 后自己 Release. 失败返回 NULL.
@@ -1007,6 +1012,10 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 		tintR, tintG, tintB, tintA,
 		blurOpacity, saturation, uniformBright, noiseAlphaPct);
 	if (!acrylic) return FALSE;
+	if (!XBlurContentClip::Attach(hWnd)) {
+		XBlurDComp::DetachAcrylicHost((void*)hWnd);
+		return FALSE;
+	}
 
 	// 4. XCGUI 整窗叠 1% 不透明度底色 — 视觉看不见但 layered hit-test 命中, 边缘 resize /
 	//    拖动才能触发. 整窗可拖.
@@ -1049,6 +1058,7 @@ void CXBlur::DetachExInternal(){
 	}
 
 	if (m_attachedWnd && XC_IsHWINDOW((HXCGUI)m_attachedWnd)){
+		XBlurContentClip::Detach(m_attachedWnd);
 		XBlurDComp::DetachAcrylicHost((void*)m_attachedWnd);
 	} else {
 		// 主窗句柄已失效: 只清 acrylic 子窗, 不调 XWnd_GetHWND.

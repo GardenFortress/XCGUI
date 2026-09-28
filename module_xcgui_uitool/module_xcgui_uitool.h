@@ -53,6 +53,7 @@
 //          [12] CXColorPicker — 现代颜色选择器 (RGBA/HEX/HSL, 吸管, 实时预览)
 //          [13] CXCheckAnim — WinUI3 风格多选框 (Toggle) 动画附加
 //          [14] CXNotify — 系统托盘通知 + 老系统 XCGUI 非模态通知降级
+//          [15] CXMask — 整窗像素模糊遮罩 (CPU Stack Blur, 静态快照, D2D/GDI)
 //@模块信息结束
 // =================================================================
 // 头文件依赖拓扑顺序说明:
@@ -96,6 +97,7 @@
 class CXTooltip;
 class CXNotify;
 class CXLoading;
+class CXMask;
 class CXCalendarCard;
 class CXDate;
 class CXShadow;
@@ -772,6 +774,98 @@ public:
 //@备注 全局清理: 停所有 timer, 清空注册表.
 //@别名  清理()
 	static void Cleanup();
+};
+//@分组}
+
+// =====================================================================
+// CXMask — 整窗像素模糊遮罩
+// =====================================================================
+
+//@分组{ 窗口遮罩
+//@备注 全静态工具类. UI 线程调用; 每个 HWINDOW 独立保存配置和快照.
+//      打开 → 执行业务/显示模态窗口 → 关闭. 模糊由 CPU 处理 BGRA 数据,
+//      只采样 XCGUI 绘图目标; 不采样独立子 HWND、桌面或外部合成表面.
+//      默认半透明黑、12 逻辑像素模糊、240ms 渐显渐隐, 拦截宿主输入, 点击不自动关闭.
+//@别名 炫彩遮罩类
+class CXMask
+{
+public:
+//@备注 打开整窗遮罩. 可见窗口同步准备快照后渐显; 隐藏/最小化窗口等待恢复后采样.
+//      重复打开幂等; 渐隐期间再次打开从当前强度反向渐显, 不重新采样.
+//      成功表示已挂接; 采样失败仍显示颜色遮罩, 可查询 IsBlurReady.
+//@参数 hWnd 宿主 XCGUI 窗口, 必须在其 UI 线程调用.
+//@返回 挂接成功 TRUE; 无效窗口、线程不符或资源分配失败 FALSE.
+//@别名 打开()
+    static BOOL Open(HWINDOW hWnd);
+//@备注 开始渐隐, 完成后释放快照并恢复宿主绘制和输入. 过渡期间继续拦截输入.
+//      保留配置; 重复关闭不重启动画. 时长为 0 或宿主不可见时立即关闭.
+//@参数 hWnd 宿主窗口.
+//@返回 有效窗口且同 UI 线程 TRUE, 否则 FALSE.
+//@别名 关闭()
+    static BOOL Close(HWINDOW hWnd);
+//@备注 查询遮罩是否仍活动; 渐显/渐隐期间为 TRUE, 渐隐结束后为 FALSE.
+//      已打开的宿主暂时隐藏/最小化时仍返回 TRUE.
+//@参数 hWnd 宿主窗口.
+//@返回 已打开 TRUE.
+//@别名 是否打开()
+    static BOOL IsOpen(HWINDOW hWnd);
+//@备注 查询当前尺寸/参数的像素快照是否就绪. 半径为 0 时表示原图缓存就绪.
+//      采样/处理失败为 FALSE; 刷新失败会继续显示上一次有效图像.
+//@参数 hWnd 宿主窗口.
+//@返回 当前缓存就绪 TRUE.
+//@别名 是否模糊就绪()
+    static BOOL IsBlurReady(HWINDOW hWnd);
+//@备注 设置叠加颜色, XCGUI RGBA (0xAABBGGRR). 默认 RGBA(0,0,0,128).
+//      可在打开前配置; 已打开时仅重新着色, 不重新采样或累计模糊.
+//@参数 hWnd 宿主窗口.
+//@参数 color 含 alpha 的颜色, alpha=0 仅显示模糊图.
+//@返回 成功 TRUE.
+//@别名 置背景色()
+    static BOOL SetBkColor(HWINDOW hWnd, COLORREF color);
+//@备注 获取叠加颜色; 未配置时返回默认半透明黑.
+//@参数 hWnd 宿主窗口.
+//@返回 XCGUI RGBA 颜色.
+//@别名 取背景色()
+    static COLORREF GetBkColor(HWINDOW hWnd);
+//@备注 设置 Stack Blur 半径, 自动限制为 0~64 逻辑像素. 0 关闭模糊.
+//      已打开时从保存的原图重新计算, 不重复模糊旧结果.
+//@参数 hWnd 宿主窗口.
+//@参数 radius 逻辑像素半径, 默认 12.
+//@返回 成功 TRUE.
+//@别名 置模糊半径()
+    static BOOL SetBlurRadius(HWINDOW hWnd, int radius);
+//@备注 获取逻辑像素模糊半径; 默认 12.
+//@参数 hWnd 宿主窗口.
+//@返回 半径.
+//@别名 取模糊半径()
+    static int GetBlurRadius(HWINDOW hWnd);
+//@备注 设置渐显渐隐的单边时长, 默认 240ms. 0 = 立即显示/关闭, 负数按 0 处理.
+//      过渡使用缓存像素, 不逐帧采样或模糊; 依赖 UI 消息循环, 不阻塞调用方.
+//      过渡中修改时长从当前强度继续; 反向切换按剩余距离折算时长.
+//@参数 hWnd 宿主窗口.
+//@参数 ms 毫秒数.
+//@返回 成功 TRUE.
+//@别名 置渐变时长()
+    static BOOL SetFadeDuration(HWINDOW hWnd, int ms);
+//@备注 获取渐显渐隐单边时长; 默认 240ms.
+//@参数 hWnd 宿主窗口.
+//@返回 毫秒数.
+//@别名 取渐变时长()
+    static int GetFadeDuration(HWINDOW hWnd);
+//@备注 设置完整单击遮罩时是否关闭, 默认 FALSE. 只关闭遮罩, 不关闭业务弹窗.
+//@参数 hWnd 宿主窗口.
+//@参数 enable TRUE 允许点击关闭.
+//@返回 成功 TRUE.
+//@别名 置点击关闭()
+    static BOOL SetCloseOnClick(HWINDOW hWnd, BOOL enable);
+//@备注 获取点击关闭开关.
+//@参数 hWnd 宿主窗口.
+//@返回 已启用 TRUE.
+//@别名 取点击关闭()
+    static BOOL GetCloseOnClick(HWINDOW hWnd);
+//@备注 清理当前 UI 线程的全部遮罩、配置、事件及快照. 在 XExitXCGUI 前调用.
+//@别名 清理()
+    static void Cleanup();
 };
 //@分组}
 
@@ -2734,6 +2828,8 @@ public:
 //      若目标窗口在附加前已有 owner (例如模态窗口), 会自动把该 owner 迁移到 acrylic
 //      背板, 形成“原 owner → acrylic → XCGUI 内容窗口”的完整链；Detach 时恢复原 owner
 //      与 WS_EX_APPWINDOW 状态。调用方不需要在附加后再次修正 GWLP_HWNDPARENT.
+//      Win11 下自动对 XCGUI 最终画面做抗锯齿圆角裁剪，保留背板的系统阴影与描边。
+//      裁剪随背板实际 DPI 和尺寸同步；最大化时关闭，还原后恢复。D2D / GDI+ 均支持。
 //
 //      参数预设按当前 SetTheme/SetTintColor/SetNoise/SetUniformBrightness/SetBlurOpacity
 //      的值用 (没显式 set 走主题默认: light=243,243,243 / blurOpacity=0.5 / sat=1.3 /

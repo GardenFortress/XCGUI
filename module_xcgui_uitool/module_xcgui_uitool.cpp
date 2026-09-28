@@ -35,6 +35,7 @@
 #include "module_xcgui_uitool_date.cpp"
 #include "module_xcgui_uitool_colorpicker.cpp"
 #include "module_xcgui_uitool_shadow.inc"
+#include "module_xcgui_uitool_mask.cpp"
 #include "module_xcgui_uitool_editdw.cpp"
 #include "module_xcgui_uitool_chat.cpp"
 #include "module_xcgui_uitool_accordion.cpp"
