@@ -144,7 +144,8 @@ static void PaintGdi(State& s, HDC dc, int width, int height, const RECT& dirty,
     }
 }
 static int CALLBACK OnPaintEnd(HWINDOW window, HDRAW draw, BOOL*) {
-    HWND hwnd = XWnd_GetHWND(window);
+    HWND hwnd = XBlur_GetLiveWindowHwnd(window);
+    if (!hwnd) return 0;
     auto s = reinterpret_cast<State*>(::GetPropW(hwnd, kProperty));
     if (!s) return 0;
     RECT client = {}, dirty = {};
@@ -176,7 +177,8 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
 }
 
 static void Detach(HWINDOW window) {
-    HWND hwnd = XWnd_GetHWND(window);
+    HWND hwnd = XBlur_GetLiveWindowHwnd(window);
+    if (!hwnd) return;
     auto s = reinterpret_cast<State*>(::RemovePropW(hwnd, kProperty));
     if (!s) return;
     XWnd_RemoveEventC(window, XWM_PAINT_END, (void*)OnPaintEnd);
@@ -187,7 +189,8 @@ static void Detach(HWINDOW window) {
 
 static bool Attach(HWINDOW window) {
     Detach(window);
-    HWND hwnd = XWnd_GetHWND(window);
+    HWND hwnd = XBlur_GetLiveWindowHwnd(window);
+    if (!hwnd) return false;
     auto s = new(std::nothrow) State;
     if (!s) return false;
     if (!::SetPropW(hwnd, kProperty, s)) { delete s; return false; }

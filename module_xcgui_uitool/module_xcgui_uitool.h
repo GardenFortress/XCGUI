@@ -474,7 +474,7 @@ public:
 // CXNotify — 系统通知 / XCGUI 降级通知
 // =====================================================================
 
-///<通知实际使用的显示通道
+///<通知提交/使用的通道；系统通道仅表示 Shell 接受提交，不保证横幅可见。
 //@别名 通知通道
 enum xnotify_channel_
 {
@@ -494,20 +494,23 @@ class CXNotify
 {
 public:
 
-//@备注 显示托盘通知。调用前必须已经通过 XTrayIcon_Add() 添加托盘图标。
+//@备注 在 XCGUI UI 线程显示通知。系统通道需要先通过 XTrayIcon_Add() 添加托盘图标；未添加时自动降级。
 //      Win10/11 优先使用系统通知；提交失败或老系统使用不抢焦点、鼠标穿透并自动关闭的 XCGUI 通知窗。
+//      系统通知是否显示、排队及停留时间由 Windows 通知设置决定，提交成功不代表横幅已经显示。
+//      系统标题/正文最多 63/255 个 UTF-16 单元，超长安全截断加省略号；不会截断代理对。
+//      降级窗按正文自适应高度并省略溢出内容，连续通知替换当前内容并重新计时。
 //@参数 hOwner 用于选择通知所在显示器和 DPI 的 XCGUI 主窗口。
 //@参数 pTitle 通知标题；NULL 或空文本使用“通知”。
 //@参数 pText 通知正文；NULL 或空文本返回失败。
 //@参数 theme XCGUI 降级通知主题；系统通知由 Windows 决定外观。
-//@参数 autoCloseMs XCGUI 降级通知显示时间，范围 1500~30000 毫秒。
+//@参数 autoCloseMs XCGUI 降级通知显示时间，范围 1500~30000 毫秒；不控制系统通知时长。
 //@返回 通知通道_*。
 //@别名 显示托盘通知()
 	static xnotify_channel_ ShowTray(HWINDOW hOwner, const wchar_t* pTitle,
 		const wchar_t* pText, xuitool_theme_ theme = xuitool_theme_auto,
 		int autoCloseMs = 4500);
 
-//@备注 关闭并销毁仍存在的 XCGUI 降级通知窗，释放字体和定时器。进程退出前调用。
+//@备注 在 UI 线程关闭并销毁 XCGUI 降级通知窗，释放字体和定时器。XExitXCGUI() 前调用；不会撤回系统通知。
 //@别名 清理()
 	static void Cleanup();
 };
@@ -2830,6 +2833,11 @@ public:
 //      与 WS_EX_APPWINDOW 状态。调用方不需要在附加后再次修正 GWLP_HWNDPARENT.
 //      Win11 下自动对 XCGUI 最终画面做抗锯齿圆角裁剪，保留背板的系统阴影与描边。
 //      裁剪随背板实际 DPI 和尺寸同步；最大化时关闭，还原后恢复。D2D / GDI+ 均支持。
+//      支持在 XE_COMBOBOX_POPUP_LIST / XWM_MENU_POPUP_WND / XE_MENU_POPUP_WND 中
+//      附加组合框下拉窗口、主菜单和子菜单。弹出窗口的背板不抢焦点、不接管任务栏，
+//      不启用整窗拖动；显示与销毁随弹出窗口同步。
+//      模态窗口同样保留原激活关系；开启 XModalWnd_EnableAutoClose 时，可在显示前
+//      或显示后附加，不会因附加过程切换焦点而自动关闭。真实失焦仍由炫彩正常处理。
 //
 //      参数预设按当前 SetTheme/SetTintColor/SetNoise/SetUniformBrightness/SetBlurOpacity
 //      的值用 (没显式 set 走主题默认: light=243,243,243 / blurOpacity=0.5 / sat=1.3 /

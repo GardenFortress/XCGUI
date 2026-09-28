@@ -35,6 +35,13 @@ static void XBlur_EnsureGrayscaleTextAA(){
 #define SafeRelease(p) do { if (p) { (p)->Release(); (p) = NULL; } } while (0)
 #endif
 
+// 显示/激活等同步调用可能让弹出窗口在回调中销毁，查询原生句柄前先检查炫彩句柄。
+static HWND XBlur_GetLiveWindowHwnd(HWINDOW window){
+	if (!window || !XC_IsHWINDOW((HXCGUI)window)) return NULL;
+	HWND hwnd = XWnd_GetHWND(window);
+	return (hwnd && ::IsWindow(hwnd)) ? hwnd : NULL;
+}
+
 #include "module_xcgui_uitool_blur_clip.inc"
 
 // 圆角路径构造 (per-corner): 四角不同时走 PathGeometry, 全相等走快路径.
@@ -977,7 +984,13 @@ void CXBlur::ReapplyExEffects(){
 }
 
 BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
-	if (!XC_IsHWINDOW((HXCGUI)hWnd)) return FALSE;
+	if (!XBlur_GetLiveWindowHwnd(hWnd)) return FALSE;
+	const XC_OBJECT_TYPE type = XC_GetObjectType((HXCGUI)hWnd);
+	const bool controlPopup = type == XC_COMBOBOXWINDOW || type == XC_POPUPMENUWINDOW ||
+		type == XC_POPUPMENUCHILDWINDOW;
+	// XCGUI 没有自动关闭状态的 getter。所有模态窗口均保留原激活关系，
+	// 避免附加时的 hide/show 或激活背板触发失焦自动关闭。
+	const bool transientPopup = controlPopup || type == XC_MODALWINDOW;
 
 	// 路径选择: auto/dcomp → dcomp acrylic; dwm 或 dcomp 不可用 → AttachToWnd ACCENT.
 	bool wantDcomp = (path == xblur_path_auto || path == xblur_path_dcomp);
@@ -995,6 +1008,7 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 
 	// 1. XCGUI 进 layered 透明 (在调 AttachAcrylicHost 之前).
 	XWnd_SetTransparentType(hWnd, window_transparent_shaped);
+	if (!XBlur_GetLiveWindowHwnd(hWnd)) return FALSE;
 	XWnd_EnableDrawBk(hWnd, FALSE);
 
 	// 显式参数优先，否则使用主题默认值。
@@ -1010,19 +1024,20 @@ BOOL CXBlur::AttachToWndEx(HWINDOW hWnd, int path){
 	// 3. 创建 acrylic + Apply effect chain + owner-owned + subclass + Show.
 	HWND acrylic = XBlurDComp::AttachAcrylicHost((void*)hWnd,
 		tintR, tintG, tintB, tintA,
-		blurOpacity, saturation, uniformBright, noiseAlphaPct);
+		blurOpacity, saturation, uniformBright, noiseAlphaPct, transientPopup);
 	if (!acrylic) return FALSE;
 	if (!XBlurContentClip::Attach(hWnd)) {
 		XBlurDComp::DetachAcrylicHost((void*)hWnd);
 		return FALSE;
 	}
+	if (!XBlur_GetLiveWindowHwnd(hWnd)) return FALSE;
 
 	// 4. XCGUI 整窗叠 1% 不透明度底色 — 视觉看不见但 layered hit-test 命中, 边缘 resize /
 	//    拖动才能触发. 整窗可拖.
 	XWnd_SetTransparentType(hWnd, window_transparent_shaped);
 	XWnd_SetTransparentAlpha(hWnd, 255);
 	XWnd_SetBkInfo(hWnd, L"{99:1.9.9;98:1(0);5:2(15)20(1)21(3)26(1)22(16777216)23(1)9(8,8,8,8);}");
-	XWnd_EnableDragWindow(hWnd, TRUE);
+	if (!controlPopup) XWnd_EnableDragWindow(hWnd, TRUE);
 
 	// 5. 给 acrylic 加系统圆角 (Win11 自动加 BORDER + frame shadow).
 	{

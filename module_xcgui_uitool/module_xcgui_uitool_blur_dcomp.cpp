@@ -1804,11 +1804,14 @@ static LRESULT CALLBACK AcrylicWndSubclassProc(
 		// 键盘 (快捷键/输入法/Tab/ESC) 必须落到 XCGUI 主窗, 但这个转移**不能**
 		// 在 Explorer 处理任务栏按钮点击的激活流程中间做 —— 实测那样会把点击
 		// 这一下"吃掉"(按钮所属窗刚被激活就被我们切成非激活)。
-		if (LOWORD(wParam) != WA_INACTIVE && s_focusFwd != 0) handFocusToOwned(s_focusFwd == 2);
+		if (LOWORD(wParam) != WA_INACTIVE && s_focusFwd != 0 &&
+		    !(::GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE))
+			handFocusToOwned(s_focusFwd == 2);
 		break;
 	case WM_SETFOCUS:
 		// 焦点落到空窗上 → 转给主窗 (SetFocus 前提: 同线程 + 是前台线程)
-		if (s_focusFwd != 0) handFocusToOwned(s_focusFwd == 2);
+		if (s_focusFwd != 0 && !(::GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE))
+			handFocusToOwned(s_focusFwd == 2);
 		break;
 	case WM_CLOSE:
 		// 任务栏右键"关闭窗口" / 系统菜单关闭 会送到 acrylic 上。acrylic 是 owner,
@@ -2176,17 +2179,19 @@ HWND AttachAcrylicHost(void* hxwOpaque,
                        float blurOpacity,
                        float saturation,
                        BOOL  uniformBrightness,
-                       float noiseAlphaPct)
+                       float noiseAlphaPct,
+                       bool transientPopup)
 {
 	HWINDOW hWnd = (HWINDOW)hxwOpaque;
 	if (!hWnd || !::XC_IsHWINDOW((HXCGUI)hWnd)) return NULL;
 	HWND xcguiHwnd = ::XWnd_GetHWND(hWnd);
-	if (!xcguiHwnd) return NULL;
+	if (!xcguiHwnd || !::IsWindow(xcguiHwnd)) return NULL;
 	// 保存 Attach 前的窗口关系。XModalWnd / owned popup 已经在这里携带业务 owner，
 	// acrylic 必须继承它，不能让后续 owner-owned 架构把模态关系截断。
 	HWND originalOwner = (HWND)::GetWindowLongPtrW(xcguiHwnd, GWLP_HWNDPARENT);
 	if (originalOwner && !::IsWindow(originalOwner)) originalOwner = NULL;
 	LONG_PTR originalExStyle = ::GetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE);
+	transientPopup = transientPopup || (originalExStyle & WS_EX_NOACTIVATE) != 0;
 
 	// 已 attach 过 → 仅刷新 effect chain, 不重复建窗.
 	{
@@ -2235,7 +2240,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 	}
 
 	// 任务栏身份默认由 acrylic 持有；预览需要它保留重定向表面。
-	const bool taskbarOnAcrylic = XBlurDComp_TaskbarOnAcrylicWindow();
+	const bool taskbarOnAcrylic = !transientPopup && XBlurDComp_TaskbarOnAcrylicWindow();
 	static const bool acrylicNoRedir =
 	    (XBlurDComp_ReadEnvInt(L"XBLUR_ACRYLIC_NOREDIRECTION", 0) != 0);
 	LONG_PTR acrylicExStyle;
@@ -2245,7 +2250,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		acrylicExStyle = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
 
 	// WS_MINIMIZEBOX 使 Explorer 发给身份窗的最小化命令生效。
-	DWORD acrylicStyle = WS_POPUP | WS_MINIMIZEBOX;
+	DWORD acrylicStyle = WS_POPUP | (transientPopup ? 0 : WS_MINIMIZEBOX);
 
 	RECT xcRect; ::GetWindowRect(xcguiHwnd, &xcRect);
 	HWND acrylicBackdrop = ::CreateWindowExW(
@@ -2302,7 +2307,7 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 			xcguiExChanged = true;
 		}
 	}
-	else if (!originalOwner){
+	else if (!transientPopup && !originalOwner){
 		::SetWindowLongPtrW(xcguiHwnd, GWL_EXSTYLE, originalExStyle | WS_EX_APPWINDOW);
 		xcguiExChanged = true;
 	}
@@ -2341,20 +2346,19 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		s_acrylicByXcgui[xcguiHwnd] = e;
 	}
 
-	// 须在 map 登记后为任务栏身份窗配置可选的自定义缩略图。
 	XBlurDComp_EnableIconicBitmapFor(xcguiHwnd);
 
 	// 旧 TOOLWINDOW 背板需要跟随主窗的虚拟桌面 cloak 状态。
 	XBlurDComp_EnsureCloakHook();
 
-	// 9. 显示 acrylic backdrop (SW_SHOWNA 不抢焦点).
-	::ShowWindow(acrylicBackdrop, SW_SHOWNA);
+	// 弹出事件发生在内容窗口显示前。此时只准备背板，等内容窗口的显示消息同步。
+	if (::IsWindowVisible(xcguiHwnd)) ::ShowWindow(acrylicBackdrop, SW_SHOWNA);
 	XBlurDComp_SyncAcrylicRect(xcguiHwnd, acrylicBackdrop);
 	XBlurDComp_ScheduleZOrderSync(xcguiHwnd);
 	XBlurDComp_ScheduleAcrylicSnapshot(xcguiHwnd);
 
 	// 先激活身份窗，让首次任务栏点击触发最小化。
-	if (taskbarOnAcrylic && !::IsIconic(acrylicBackdrop)){
+	if (taskbarOnAcrylic && ::IsWindowVisible(xcguiHwnd) && !::IsIconic(acrylicBackdrop)){
 		::SetForegroundWindow(acrylicBackdrop);
 	}
 
@@ -2364,7 +2368,9 @@ HWND AttachAcrylicHost(void* hxwOpaque,
 		::ShowWindow(xcguiHwnd, SW_SHOW);
 	}
 
-	return acrylicBackdrop;
+	// 激活/显示会同步进入用户回调，窗口可能在其中被关闭。
+	return (::IsWindow(xcguiHwnd) && ::IsWindow(acrylicBackdrop) &&
+	        ::XC_IsHWINDOW((HXCGUI)hWnd)) ? acrylicBackdrop : NULL;
 }
 
 HWND GetAcrylicHwnd(void* hxwOpaque){
