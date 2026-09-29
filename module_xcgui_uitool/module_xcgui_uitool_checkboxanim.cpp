@@ -511,9 +511,11 @@ int CALLBACK CXCheckAnim::OnMouseHoverC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL
 	return 0;
 }
 
-int CALLBACK CXCheckAnim::OnMouseLeaveC(HELE hBtn, BOOL* pbHandled)
+int CALLBACK CXCheckAnim::OnMouseLeaveC(HELE hBtn, HELE hEleStay, BOOL* pbHandled)
 {
-	(void)pbHandled;
+	// XE_MOUSELEAVE supplies the next hover element before pbHandled.
+	// C1 includes hBtn; omitting hEleStay unbalances the x86 CALLBACK stack.
+	(void)hEleStay; (void)pbHandled;
 	_XChk_Entry* e = _XChk_Find(hBtn);
 	if (!e) return 0;
 	if (!e->bHover && !e->bPressed) return 0;

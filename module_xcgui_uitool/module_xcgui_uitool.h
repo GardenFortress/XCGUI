@@ -5203,7 +5203,7 @@ public:
 	static int CALLBACK OnPaintC(HELE hBtn, HDRAW hDraw, BOOL* pbHandled);
 	static int CALLBACK OnPaintEndC(HELE hBtn, HDRAW hDraw, BOOL* pbHandled);
 	static int CALLBACK OnMouseHoverC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
-	static int CALLBACK OnMouseLeaveC(HELE hBtn, BOOL* pbHandled);
+	static int CALLBACK OnMouseLeaveC(HELE hBtn, HELE hEleStay, BOOL* pbHandled);
 	static int CALLBACK OnLButtonDownC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 	static int CALLBACK OnLButtonUpC(HELE hBtn, UINT nFlags, POINT* pPt, BOOL* pbHandled);
 	static int CALLBACK OnButtonCheckC(HELE hBtn, BOOL bCheck, BOOL* pbHandled);
